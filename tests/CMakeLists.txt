@@ -56,6 +56,7 @@ set(TEST_SOURCES
     dsp/test_euclidean_pattern.cpp
     dsp/test_summoner_chords.cpp
     dsp/test_summoner_strum.cpp
+    dsp/test_summoner_voice_env.cpp
     main.cpp
 )
 
