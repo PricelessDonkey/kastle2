@@ -54,6 +54,7 @@ set(TEST_SOURCES
     dsp/test_oscillator.cpp
     dsp/test_noise_blend_crossfade.cpp
     dsp/test_euclidean_pattern.cpp
+    dsp/test_summoner_chords.cpp
     main.cpp
 )
 
