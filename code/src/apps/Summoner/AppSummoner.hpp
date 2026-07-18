@@ -53,10 +53,10 @@ public:
      */
     uint8_t GetId()
     {
-        return Kastle2::kDefaultAppId;
+        return kAppId;
     }
 
 private:
-    // Put private variables here
+    static constexpr uint8_t kAppId = 0x11; ///< Community app ID range (see APP_LIST.md)
 };
 }

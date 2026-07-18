@@ -6,7 +6,10 @@ using namespace kastle2;
 
 void AppSummoner::Init()
 {
-
+    // App owns ENV/CV/GATE outputs; Base keeps LFO, SYNC, clock and audio chain
+    Kastle2::base.SetFeatureEnabled(Base::Feature::ENV_OUT, false);
+    Kastle2::base.SetFeatureEnabled(Base::Feature::CV_OUT, false);
+    Kastle2::base.SetFeatureEnabled(Base::Feature::GATE_OUT, false);
 }
 
 void AppSummoner::DeInit()
