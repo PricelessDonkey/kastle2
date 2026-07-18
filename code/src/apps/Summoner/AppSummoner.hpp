@@ -2,9 +2,12 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include "common/core/App.hpp"
 #include "common/core/Kastle2.hpp"
+#include "common/controls/FancyPot.hpp"
 #include "common/dsp/math/qmath.hpp"
+#include "common/dsp/synthesis/OscillatorQ15.hpp"
 
 namespace kastle2
 {
@@ -12,7 +15,7 @@ namespace kastle2
 /**
  * @class AppSummoner
  * @ingroup apps
- * @brief App description
+ * @brief Summoner — generative chord synthesizer (see CHORD-GEN.md design doc)
  * @author sam
  * @date 2026-07-17
  */
@@ -58,5 +61,12 @@ public:
 
 private:
     static constexpr uint8_t kAppId = 0x11; ///< Community app ID range (see APP_LIST.md)
+
+    bool inited_ = false;
+
+    // Phase 0: temporary drone to prove the audio path; replaced by the voice engine in Phase 2
+    OscillatorQ15 drone_osc_;
+    std::unique_ptr<FancyPot> volume_pot_;
+    q15_t volume_ = 0;
 };
 }
