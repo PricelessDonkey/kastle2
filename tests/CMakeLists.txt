@@ -44,6 +44,7 @@ set(DSP_SOURCES
     ${FIRMWARE_SRC}/common/dsp/effects/SoftClipper.cpp
     ${FIRMWARE_SRC}/common/dsp/synthesis/Oscillator.cpp
     ${FIRMWARE_SRC}/common/dsp/synthesis/OscillatorQ15.cpp
+    ${FIRMWARE_SRC}/common/dsp/filters/Svf.cpp
 )
 
 set(TEST_SOURCES

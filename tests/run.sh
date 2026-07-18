@@ -18,6 +18,7 @@ OUT="${1:-/tmp/kastle2_dsp_tests}"
     ../code/src/common/dsp/effects/SoftClipper.cpp \
     ../code/src/common/dsp/synthesis/Oscillator.cpp \
     ../code/src/common/dsp/synthesis/OscillatorQ15.cpp \
+    ../code/src/common/dsp/filters/Svf.cpp \
     -o "$OUT"
 
 exec "$OUT"
