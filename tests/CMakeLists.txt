@@ -53,6 +53,7 @@ set(TEST_SOURCES
     dsp/test_slewer.cpp
     dsp/test_oscillator.cpp
     dsp/test_noise_blend_crossfade.cpp
+    dsp/test_euclidean_pattern.cpp
     main.cpp
 )
 
