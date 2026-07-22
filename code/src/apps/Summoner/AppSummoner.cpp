@@ -20,6 +20,11 @@ constexpr uint32_t kStrumSeed = 0x50111011;
 // Pitch offset (POT_1) range: +-1 octave around center
 constexpr float kPitchOffsetOctaves = 1.0f;
 
+// Decay/length (POT_4 + LENGTH MOD CV): short pluck to long pad
+constexpr auto kMapDecay = MapDef<float, 5>{
+    {pot(0.0f), pot(0.25f), pot(0.5f), pot(0.75f), pot(1.0f)},
+    {0.03f, 0.12f, 0.4f, 1.2f, 4.0f}};
+
 }
 
 void AppSummoner::Init()
@@ -57,6 +62,12 @@ void AppSummoner::Init()
         .deadzone = true,
     });
     pitch_pot_->Init(AUDIO_LOOP_RATE);
+
+    decay_pot_ = FancyPot::Create({
+        .pot = Hardware::Pot::POT_4,
+        .layer = Hardware::Layer::NORMAL,
+    });
+    decay_pot_->Init(AUDIO_LOOP_RATE);
 
     inited_ = true;
 }
@@ -106,6 +117,7 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
 
     volume_pot_->Process();
     pitch_pot_->Process();
+    decay_pot_->Process();
 }
 
 void AppSummoner::FireChord()
@@ -139,7 +151,17 @@ void AppSummoner::UiLoop()
 
     volume_pot_->ReadValue();
     pitch_pot_->ReadValue();
+    decay_pot_->ReadValue();
     volume_ = pot_to_q15(volume_pot_->GetValue());
+
+    // Decay/length: POT_4 summed with LENGTH MOD CV (PARAM_3), same time on all voices
+    const int32_t decay_val = decay_pot_->GetValue()
+                              + Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PARAM_3);
+    const float decay_time = curve_map(decay_val, kMapDecay, MapClamp::TRUE);
+    for (size_t v = 0; v < kNumVoices; v++)
+    {
+        envs_[v].SetDecayTime(decay_time);
+    }
 
     Kastle2::hw.SetLed(Hardware::Led::LED_1, WS2812::GREEN);
     Kastle2::hw.SetLed(Hardware::Led::LED_2, WS2812::BLUE);
