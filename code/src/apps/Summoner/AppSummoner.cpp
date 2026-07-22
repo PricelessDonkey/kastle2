@@ -163,6 +163,10 @@ void AppSummoner::UiLoop()
         envs_[v].SetDecayTime(decay_time);
     }
 
+    // Sustain gate: chord holds at 60% while PATTERN G is high (analog tri-state,
+    // ~9ms worst-case latency — fine for a sustain toggle)
+    sustain_gate_ = (Kastle2::hw.GetFeedValue(Hardware::AnalogInput::FEED_1) == Hardware::FeedValue::HIGH);
+
     Kastle2::hw.SetLed(Hardware::Led::LED_1, WS2812::GREEN);
     Kastle2::hw.SetLed(Hardware::Led::LED_2, WS2812::BLUE);
 }
