@@ -53,7 +53,7 @@ set(TEST_SOURCES
     dsp/test_soft_clipper.cpp
     dsp/test_slewer.cpp
     dsp/test_oscillator.cpp
-    dsp/test_noise_blend_crossfade.cpp
+    dsp/test_noise_blend.cpp
     dsp/test_euclidean_pattern.cpp
     dsp/test_summoner_chords.cpp
     dsp/test_summoner_strum.cpp
