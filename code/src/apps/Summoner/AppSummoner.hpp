@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -8,6 +9,11 @@
 #include "common/controls/FancyPot.hpp"
 #include "common/dsp/math/qmath.hpp"
 #include "common/dsp/synthesis/OscillatorQ15.hpp"
+#include "common/dsp/utility/EdgeDetector.hpp"
+#include "common/dsp/utility/Quantizer.hpp"
+#include "SummonerChords.hpp"
+#include "SummonerStrum.hpp"
+#include "SummonerVoiceEnv.hpp"
 
 namespace kastle2
 {
@@ -62,10 +68,29 @@ public:
 private:
     static constexpr uint8_t kAppId = 0x11; ///< Community app ID range (see APP_LIST.md)
 
+    static constexpr size_t kNumVoices = SummonerChords::kNumVoices;
+
+    /**
+     * @brief Computes the chord from the current root/quality/voicing, sets the
+     *        voice frequencies and schedules the strum. Called from UiLoop on a
+     *        chord-fire event (clock tick or TRIG edge).
+     */
+    void FireChord();
+
     bool inited_ = false;
 
-    // Phase 0: temporary drone to prove the audio path; replaced by the voice engine in Phase 2
-    OscillatorQ15 drone_osc_;
+    // Voice engine
+    std::array<OscillatorQ15, kNumVoices> oscs_;
+    std::array<SummonerVoiceEnv, kNumVoices> envs_;
+    SummonerStrum strum_;
+    Quantizer quantizer_;
+
+    // Chord-fire path
+    EdgeDetector trigger_detect_ = EdgeDetector(EdgeDetector::Type::RISING);
+    bool do_fire_ = false;
+    bool sustain_gate_ = false;
+
+    // Pots
     std::unique_ptr<FancyPot> volume_pot_;
     q15_t volume_ = 0;
 };
