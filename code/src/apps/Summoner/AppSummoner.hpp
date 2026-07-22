@@ -92,6 +92,7 @@ private:
 
     // Pots
     std::unique_ptr<FancyPot> volume_pot_;
+    std::unique_ptr<FancyPot> pitch_pot_;
     q15_t volume_ = 0;
 };
 }

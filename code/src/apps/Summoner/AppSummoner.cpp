@@ -17,6 +17,9 @@ constexpr float kMaxPitchHz = 8000.0f;
 // Strum seed — deterministic humanize jitter stream (any nonzero constant)
 constexpr uint32_t kStrumSeed = 0x50111011;
 
+// Pitch offset (POT_1) range: +-1 octave around center
+constexpr float kPitchOffsetOctaves = 1.0f;
+
 }
 
 void AppSummoner::Init()
@@ -47,6 +50,13 @@ void AppSummoner::Init()
         .layer = Hardware::Layer::NORMAL,
     });
     volume_pot_->Init(AUDIO_LOOP_RATE);
+
+    pitch_pot_ = FancyPot::Create({
+        .pot = Hardware::Pot::POT_1,
+        .layer = Hardware::Layer::NORMAL,
+        .deadzone = true,
+    });
+    pitch_pot_->Init(AUDIO_LOOP_RATE);
 
     inited_ = true;
 }
@@ -84,11 +94,17 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
     }
 
     volume_pot_->Process();
+    pitch_pot_->Process();
 }
 
 void AppSummoner::FireChord()
 {
-    const float root = cv_to_freq_raw(kRootBase, 0);
+    // Root: FREE NOTE 1V/oct, sampled at fire time (stock convention for PITCH_2),
+    // transposed by the POT_1 offset (+-1 octave, center = no transpose)
+    const int32_t note_cv = Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PITCH_2);
+    const float offset = static_cast<float>(pitch_pot_->GetValue() - pot(0.5f)) / static_cast<float>(pot(0.5f));
+    float root = cv_to_freq_raw(kRootBase, note_cv);
+    root *= std::pow(2.0f, offset * kPitchOffsetOctaves);
 
     std::array<float, kNumVoices> frequencies;
     SummonerChords::ComputeChord(root, SummonerChords::Quality::MAJOR, 0.0f,
@@ -111,6 +127,7 @@ void AppSummoner::UiLoop()
     }
 
     volume_pot_->ReadValue();
+    pitch_pot_->ReadValue();
     volume_ = pot_to_q15(volume_pot_->GetValue());
 
     Kastle2::hw.SetLed(Hardware::Led::LED_1, WS2812::GREEN);
