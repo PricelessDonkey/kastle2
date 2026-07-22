@@ -72,6 +72,17 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
         return;
     }
 
+    // Fire path: every Base clock tick fires the full chord (euclidean sequencer
+    // arrives in Phase 4); a TRIG_IN rising edge fires additively on top
+    if (Kastle2::base.GetClock().IsNowTrigger())
+    {
+        do_fire_ = true;
+    }
+    if (trigger_detect_.Process(Kastle2::hw.GetTriggerIn()))
+    {
+        do_fire_ = true;
+    }
+
     for (size_t i = 0; i < size; i++)
     {
         const uint32_t fired = strum_.Tick();
