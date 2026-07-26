@@ -139,6 +139,7 @@ void AppSummoner::Init()
         .layer = Hardware::Layer::SHIFT,
         .initial_value = POT_MIN, // low -> high default
         .map_size = static_cast<size_t>(SummonerStrum::Direction::COUNT),
+        .memory_addr = kMemStrumDir,
     });
 
     pots_[Pot::LENGTH_ATTEN] = FancyPot::Create({
@@ -159,6 +160,7 @@ void AppSummoner::Init()
         .layer = Hardware::Layer::MODE,
         .initial_value = POT_HALF, // middle of the scale table = chromatic
         .map_size = quantizer_.GetScaleTableSize(),
+        .memory_addr = kMemScale,
     });
 
     for (auto &pot : pots_)
@@ -168,6 +170,11 @@ void AppSummoner::Init()
 
     combo_.Init();
     combo_.SetSlotValue(SlotIndex(ComboSlot::WAVEFORM), kWaveformDefaultSlotValue);
+    uint8_t waveform_mem = 0;
+    if (Kastle2::memory.Read8(kMemWaveform, &waveform_mem))
+    {
+        combo_.SetSlotValue(SlotIndex(ComboSlot::WAVEFORM), mem_to_pot(waveform_mem));
+    }
     ApplyComboSlots(true);
 
     // FX B cycle: BANK press-release with no turn; a MODE-layer pot move or a
@@ -180,6 +187,14 @@ void AppSummoner::Init()
 
 void AppSummoner::DeInit()
 {
+}
+
+void AppSummoner::MemoryInitialization()
+{
+    Kastle2::memory.Write8(kMemScale, pot_to_mem(POT_HALF));   // chromatic
+    Kastle2::memory.Write8(kMemStrumDir, pot_to_mem(POT_MIN)); // low -> high
+    Kastle2::memory.Write8(kMemFxMode, std::to_underlying(FxB::OFF));
+    Kastle2::memory.Write8(kMemWaveform, pot_to_mem(kWaveformDefaultSlotValue)); // saw
 }
 
 FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *output, size_t size)
@@ -308,6 +323,11 @@ void AppSummoner::ApplyComboSlots(const bool force)
         for (size_t v = 0; v < kNumVoices; v++)
         {
             oscs_[v].SetWaveform(kWaveformZones[zone]);
+        }
+        if (!force)
+        {
+            // Persist on zone change (not per pot tick — spares the EEPROM queue)
+            Kastle2::memory.QueueUpdate8(kMemWaveform, pot_to_mem(combo_.GetValue(SlotIndex(ComboSlot::WAVEFORM))));
         }
     }
 

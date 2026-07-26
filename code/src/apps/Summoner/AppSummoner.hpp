@@ -57,7 +57,7 @@ public:
     /**
      * @brief Called when the app is first loaded - initializes the memory values.
      */
-    void MemoryInitialization() {}
+    void MemoryInitialization();
 
     /**
      * @brief Returns the app ID.
@@ -72,6 +72,13 @@ private:
     static constexpr uint8_t kAppId = 0x11; ///< Community app ID range (see APP_LIST.md)
 
     static constexpr size_t kNumVoices = SummonerChords::kNumVoices;
+
+    // EEPROM addresses for the stepped selectors (persist across power cycles;
+    // the 0x11 app ID keeps them app-specific)
+    static constexpr size_t kMemScale = Memory::ADDR_APP_SPACE + 0x0;    ///< Quantizer scale (BANK+POT_1)
+    static constexpr size_t kMemStrumDir = Memory::ADDR_APP_SPACE + 0x1; ///< Strum direction (SHIFT+POT_3)
+    static constexpr size_t kMemFxMode = Memory::ADDR_APP_SPACE + 0x2;   ///< FX B selection (BANK press cycle)
+    static constexpr size_t kMemWaveform = Memory::ADDR_APP_SPACE + 0x3; ///< Waveform slot value (SHIFT+BANK+POT_2)
 
     /**
      * @brief All FancyPot-managed knob functions (NORMAL / SHIFT / MODE layers
@@ -179,6 +186,7 @@ private:
 
     /** @brief FX B selector: BANK press-release cycles it; movement/timeout cancels. */
     FancyMode fx_mode_ = FancyMode(FancyMode::Config{
+        .memory_addr = kMemFxMode,
         .modes_count = static_cast<uint32_t>(FxB::COUNT),
         .input_reading = FancyMode::InputReading::NONE});
 
