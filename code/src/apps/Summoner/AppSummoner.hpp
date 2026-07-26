@@ -12,9 +12,12 @@
 #include "common/dsp/math/qmath.hpp"
 #include "common/dsp/synthesis/OscillatorQ15.hpp"
 #include "common/dsp/utility/EdgeDetector.hpp"
+#include "common/dsp/utility/EuclideanPattern.hpp"
+#include "common/dsp/utility/Portamento.hpp"
 #include "common/dsp/utility/Quantizer.hpp"
 #include "SummonerChords.hpp"
 #include "SummonerComboLayer.hpp"
+#include "SummonerSequencer.hpp"
 #include "SummonerStrum.hpp"
 #include "SummonerVoiceEnv.hpp"
 
@@ -94,11 +97,13 @@ private:
         VOICING,      ///< POT_2 primary: voicing sweep close -> open -> extended
         STRUM_SPEED,  ///< POT_3 primary: strum, 0 = block chord, max = slow arpeggio
         QUALITY,      ///< POT_6 primary: chord quality zones (major ... dim)
-        PORTAMENTO,   ///< SHIFT+POT_1: portamento time (glide wired in Phase 4)
+        PORTAMENTO,   ///< SHIFT+POT_1: portamento time on the chord root
         STRUM_DIR,    ///< SHIFT+POT_3: strum direction (3-way stepped)
         LENGTH_ATTEN, ///< SHIFT+POT_4: LENGTH MOD CV attenuation
         CUTOFF,       ///< SHIFT+POT_6: filter cutoff (filter arrives in Phase 6)
         SCALE,        ///< BANK+POT_1: quantizer scale select
+        DENSITY,      ///< BANK+POT_3: euclidean density 0 -> K (0 = sequencer silent)
+        LENGTH,       ///< BANK+POT_4: euclidean cycle length K (stepped, 2-16)
         COUNT
     };
 
@@ -158,7 +163,23 @@ private:
     // Chord-fire path
     EdgeDetector trigger_detect_ = EdgeDetector(EdgeDetector::Type::RISING);
     bool do_fire_ = false;
+    bool clock_tick_ = false;
     bool sustain_gate_ = false;
+
+    // Euclidean sequencer (steps on Base clock ticks; hits fire chords)
+    EuclideanPattern euclid_;
+
+    // PATTERN R (FEED_2) generator reset: previous tri-state, and the voicing
+    // snap latch it sets (voicing forced to 0% until knob or CV movement)
+    bool feed2_high_ = false;
+    bool voicing_snap_ = false;
+    int32_t voicing_cv_at_snap_ = 0;
+
+    // Portamento on the chord root: the glide runs in log2-frequency space so
+    // it sounds linear in pitch; voices scale by glided/target ratio
+    Portamento portamento_;
+    float root_pitch_target_ = 0.0f;                  ///< log2(target root Hz), set at fire time
+    std::array<float, kNumVoices> voice_freq_ = {};   ///< Chord tone frequencies (pre-detune) from the last fire
 
     // Pots
     EnumArray<Pot, std::unique_ptr<FancyPot>> pots_;

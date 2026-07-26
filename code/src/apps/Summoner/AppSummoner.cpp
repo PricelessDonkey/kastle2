@@ -1,5 +1,6 @@
 #include "AppSummoner.hpp"
 #include <cmath>
+#include <cstdlib>
 #include "common/core/Kastle2.hpp"
 #include "common/utils.hpp"
 
@@ -34,6 +35,15 @@ constexpr auto kMapStrum = MapDef<int32_t, 5>{
 // A BANK press only cycles FX B when released within this time (and with no
 // knob turn) — same gesture timing as the stock apps' bank/mode buttons
 constexpr uint32_t kModeShortPressUnder = s2alr(1.5f);
+
+// Portamento time (SHIFT+POT_1): off at zero, up to a slow 2s glide
+constexpr auto kMapPortamento = MapDef<float, 5>{
+    {pot(0.0f), pot(0.25f), pot(0.5f), pot(0.75f), pot(1.0f)},
+    {0.0f, 0.05f, 0.2f, 0.6f, 2.0f}};
+
+// PARAM_1 movement that releases the PATTERN R voicing snap (~2% of range,
+// safely above unconnected-jack ADC noise)
+constexpr int32_t kVoicingSnapCvRelease = pot(0.02f);
 
 // Attack time (SHIFT+BANK+POT_4): struck feel to slow pad swell
 constexpr auto kMapAttack = MapDef<float, 5>{
@@ -87,6 +97,12 @@ void AppSummoner::Init()
     }
 
     strum_.Init(kStrumSeed);
+    voice_freq_.fill(kRootBase);
+
+    euclid_.Init(); // power-on default: hits = length = 16, a chord on every tick
+
+    portamento_.Init(AUDIO_LOOP_RATE);
+    root_pitch_target_ = std::log2(kRootBase);
 
     quantizer_.Init(0.8f);
     quantizer_.SetEnabled(true);
@@ -163,10 +179,25 @@ void AppSummoner::Init()
         .memory_addr = kMemScale,
     });
 
+    pots_[Pot::DENSITY] = FancyPot::Create({
+        .pot = Hardware::Pot::POT_3,
+        .layer = Hardware::Layer::MODE,
+        .initial_value = POT_MAX, // power-on default = K: a chord on every tick
+    });
+
+    pots_[Pot::LENGTH] = FancyPot::Create({
+        .pot = Hardware::Pot::POT_4,
+        .layer = Hardware::Layer::MODE,
+        .initial_value = POT_MAX, // power-on default: 16 steps
+        .map_size = SummonerSequencer::kLengthSteps,
+    });
+
     for (auto &pot : pots_)
     {
         pot->Init(AUDIO_LOOP_RATE);
     }
+
+    portamento_.SetSpeed(curve_map(pots_[Pot::PORTAMENTO]->GetValue(), kMapPortamento, MapClamp::TRUE));
 
     combo_.Init();
     combo_.SetSlotValue(SlotIndex(ComboSlot::WAVEFORM), kWaveformDefaultSlotValue);
@@ -204,16 +235,18 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
         return;
     }
 
-    // Fire path: every Base clock tick fires the full chord (euclidean sequencer
-    // arrives in Phase 4); a TRIG_IN rising edge fires additively on top
+    // Fire path: Base clock ticks step the euclidean pattern (in UiLoop — its
+    // hits fire chords); a TRIG_IN rising edge fires additively on top
     if (Kastle2::base.GetClock().IsNowTrigger())
     {
-        do_fire_ = true;
+        clock_tick_ = true;
     }
     if (trigger_detect_.Process(Kastle2::hw.GetTriggerIn()))
     {
         do_fire_ = true;
     }
+
+    portamento_.TimeTick();
 
     for (size_t i = 0; i < size; i++)
     {
@@ -252,22 +285,29 @@ void AppSummoner::FireChord()
     float root = cv_to_freq_raw(kRootBase, note_cv);
     root *= std::pow(2.0f, offset * kPitchOffsetOctaves);
 
+    // Portamento glides toward the new root: chord tones are computed from the
+    // target and scaled by the glide ratio each UiLoop pass
+    root_pitch_target_ = std::log2(root);
+
     // Quality: POT_6 zones (0/15/30/45/60/75/85/100% per the design table)
-    const auto quality = SummonerChords::QualityFromQ15(pot_to_q15(pots_[Pot::QUALITY]->GetValue()));
+    // summed with the BANK/MODE CV — stepped zone selection like stock bank select
+    const int32_t quality_val = pots_[Pot::QUALITY]->GetValue() +
+                                Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::MODE);
+    const auto quality = SummonerChords::QualityFromQ15(pot_to_q15(quality_val));
 
-    // Voicing: POT_2 continuous interpolation close -> open -> extended
-    const float voicing = static_cast<float>(pots_[Pot::VOICING]->GetValue()) / static_cast<float>(POT_MAX);
+    // Voicing: POT_2 summed with SAMPLE MOD CV (PARAM_1), continuous
+    // close -> open -> extended; the PATTERN R snap forces 0% until movement
+    const int32_t voicing_val = constrain(pots_[Pot::VOICING]->GetValue() +
+                                              Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PARAM_1),
+                                          POT_MIN, POT_MAX);
+    const float voicing = voicing_snap_ ? 0.0f : static_cast<float>(voicing_val) / static_cast<float>(POT_MAX);
 
-    std::array<float, kNumVoices> frequencies;
-    SummonerChords::ComputeChord(root, quality, voicing, quantizer_, frequencies);
+    SummonerChords::ComputeChord(root, quality, voicing, quantizer_, voice_freq_);
 
-    for (size_t v = 0; v < kNumVoices; v++)
-    {
-        oscs_[v].SetFrequency(fmin(frequencies[v] * detune_mult_[v], kMaxPitchHz));
-    }
-
-    // Strum: speed from POT_3, direction from SHIFT+POT_3
-    const int32_t strum_frames = curve_map(pots_[Pot::STRUM_SPEED]->GetValue(), kMapStrum, MapClamp::TRUE);
+    // Strum: speed from POT_3 summed with LFO MOD CV (PARAM_2), direction from SHIFT+POT_3
+    const int32_t strum_val = pots_[Pot::STRUM_SPEED]->GetValue() +
+                              Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PARAM_2);
+    const int32_t strum_frames = curve_map(strum_val, kMapStrum, MapClamp::TRUE);
     int32_t dir_index = pots_[Pot::STRUM_DIR]->GetMappedValue();
     if (dir_index < 0)
     {
@@ -361,6 +401,36 @@ void AppSummoner::ApplyComboSlots(const bool force)
 
 void AppSummoner::UiLoop()
 {
+    // PATTERN R (FEED_2) rising edge: generator reset — pattern to step 1,
+    // pending strum cancelled, voicing snapped to 0% until knob/CV movement
+    const bool feed2 = (Kastle2::hw.GetFeedValue(Hardware::AnalogInput::FEED_2) == Hardware::FeedValue::HIGH);
+    if (feed2 && !feed2_high_)
+    {
+        euclid_.Reset();
+        strum_.Reset();
+        voicing_snap_ = true;
+        voicing_cv_at_snap_ = Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PARAM_1);
+    }
+    feed2_high_ = feed2;
+
+    // Sequencer params: density = BANK+POT_3 + PATTERN C (FEED_3) CV,
+    // cycle length = BANK+POT_4. Density 0 = silent (the knob normal-breaker).
+    const size_t length = SummonerSequencer::LengthFromMapped(pots_[Pot::LENGTH]->GetMappedValue());
+    const int32_t density = pots_[Pot::DENSITY]->GetValue() +
+                            SummonerSequencer::DensityCvToPot(Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::FEED_3));
+    euclid_.SetPattern(SummonerSequencer::DensityToHits(density, length), length);
+
+    // Clock ticks step the pattern and its hits fire chords; TRIG_IN fires
+    // additively on top via do_fire_
+    if (clock_tick_)
+    {
+        clock_tick_ = false;
+        if (euclid_.Step())
+        {
+            do_fire_ = true;
+        }
+    }
+
     if (do_fire_)
     {
         FireChord();
@@ -386,6 +456,30 @@ void AppSummoner::UiLoop()
         }
         fx_mode_.ReadValue();
         fx_b_ = static_cast<FxB>(fx_mode_.GetMode());
+    }
+
+    // PATTERN R voicing snap releases on voicing knob or SAMPLE MOD CV movement
+    if (voicing_snap_)
+    {
+        const int32_t voicing_cv = Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PARAM_1);
+        if (pots_[Pot::VOICING]->HasChanged() ||
+            std::abs(voicing_cv - voicing_cv_at_snap_) > kVoicingSnapCvRelease)
+        {
+            voicing_snap_ = false;
+        }
+    }
+
+    // Portamento: glide the root in pitch space and scale all chord tones by
+    // the glide ratio (1.0 once the glide lands); detune spread on top
+    if (pots_[Pot::PORTAMENTO]->HasChanged())
+    {
+        portamento_.SetSpeed(curve_map(pots_[Pot::PORTAMENTO]->GetValue(), kMapPortamento, MapClamp::TRUE));
+    }
+    const float glided_pitch = portamento_.Track(root_pitch_target_);
+    const float glide_ratio = std::exp2(glided_pitch - root_pitch_target_);
+    for (size_t v = 0; v < kNumVoices; v++)
+    {
+        oscs_[v].SetFrequency(fmin(voice_freq_[v] * glide_ratio * detune_mult_[v], kMaxPitchHz));
     }
 
     volume_ = pot_to_q15(pots_[Pot::VOLUME]->GetValue());
