@@ -126,6 +126,20 @@ private:
      */
     void ProcessComboLayer();
 
+    /**
+     * @brief Applies the SHIFT+BANK slot values to the voice engine (waveform,
+     *        detune spread, humanize, attack).
+     * @param force Apply everything regardless of change flags (Init / after
+     *              loading persisted values).
+     */
+    void ApplyComboSlots(bool force);
+
+    /** @brief Shorthand for a ComboSlot's index into SummonerComboLayer. */
+    static constexpr size_t SlotIndex(const ComboSlot slot)
+    {
+        return static_cast<size_t>(slot);
+    }
+
     bool inited_ = false;
 
     // Voice engine
@@ -145,6 +159,9 @@ private:
 
     // SHIFT+BANK fourth layer
     SummonerComboLayer combo_;
+    int32_t waveform_zone_ = -1;                       ///< Cached waveform zone (-1 = not applied yet)
+    std::array<float, kNumVoices> detune_mult_ = {1.0f, 1.0f, 1.0f, 1.0f}; ///< Per-voice detune multipliers (root stays true)
+    float humanize_ = 0.0f;                            ///< Strum jitter amount 0..1
 
     /**
      * @brief FX B slot states (Phase 8 wires the actual effects), cycled by a

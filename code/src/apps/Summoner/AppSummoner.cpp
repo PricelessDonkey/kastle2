@@ -35,6 +35,27 @@ constexpr auto kMapStrum = MapDef<int32_t, 5>{
 // knob turn) — same gesture timing as the stock apps' bank/mode buttons
 constexpr uint32_t kModeShortPressUnder = s2alr(1.5f);
 
+// Attack time (SHIFT+BANK+POT_4): struck feel to slow pad swell
+constexpr auto kMapAttack = MapDef<float, 5>{
+    {pot(0.0f), pot(0.25f), pot(0.5f), pot(0.75f), pot(1.0f)},
+    {0.002f, 0.02f, 0.1f, 0.4f, 1.0f}};
+
+// Detune spread (SHIFT+BANK+POT_1): max per-voice offset in cents — modest so
+// it reads as thickness, not out-of-tune (CHORD-GEN.md Voices)
+constexpr float kMaxDetuneCents = 12.0f;
+
+// Waveform select zones (SHIFT+BANK+POT_2); RAMP is excluded — same waveshape
+// as SAW, just phase-mirrored (see CHORD-GEN.md Voices, 2026-07-17 note)
+constexpr std::array<Oscillator::Waveform, 4> kWaveformZones = {
+    Oscillator::Waveform::SINE,
+    Oscillator::Waveform::TRI,
+    Oscillator::Waveform::SAW,
+    Oscillator::Waveform::SQUARE,
+};
+
+// Raw slot value (0-4095) whose zone is SAW — the power-on default waveform
+constexpr int32_t kWaveformDefaultSlotValue = 2560;
+
 // SHIFT+BANK fourth-layer slot -> physical pot (index = ComboSlot)
 constexpr std::array<Hardware::Pot, SummonerComboLayer::kNumSlots> kComboSlotPots = {
     Hardware::Pot::POT_1,
@@ -146,6 +167,8 @@ void AppSummoner::Init()
     }
 
     combo_.Init();
+    combo_.SetSlotValue(SlotIndex(ComboSlot::WAVEFORM), kWaveformDefaultSlotValue);
+    ApplyComboSlots(true);
 
     // FX B cycle: BANK press-release with no turn; a MODE-layer pot move or a
     // long hold cancels the pending change (stock bank-button coexistence rule)
@@ -225,7 +248,7 @@ void AppSummoner::FireChord()
 
     for (size_t v = 0; v < kNumVoices; v++)
     {
-        oscs_[v].SetFrequency(fmin(frequencies[v], kMaxPitchHz));
+        oscs_[v].SetFrequency(fmin(frequencies[v] * detune_mult_[v], kMaxPitchHz));
     }
 
     // Strum: speed from POT_3, direction from SHIFT+POT_3
@@ -235,7 +258,7 @@ void AppSummoner::FireChord()
     {
         dir_index = 0;
     }
-    strum_.Fire(strum_frames, static_cast<SummonerStrum::Direction>(dir_index), 0.0f);
+    strum_.Fire(strum_frames, static_cast<SummonerStrum::Direction>(dir_index), humanize_);
 }
 
 void AppSummoner::ProcessComboLayer()
@@ -267,6 +290,55 @@ void AppSummoner::ProcessComboLayer()
     }
 }
 
+void AppSummoner::ApplyComboSlots(const bool force)
+{
+    // Waveform select: 4 zones over the pot travel
+    int32_t zone = (combo_.GetValue(SlotIndex(ComboSlot::WAVEFORM)) * static_cast<int32_t>(kWaveformZones.size())) / (POT_MAX + 1);
+    if (zone < 0)
+    {
+        zone = 0;
+    }
+    if (zone >= static_cast<int32_t>(kWaveformZones.size()))
+    {
+        zone = static_cast<int32_t>(kWaveformZones.size()) - 1;
+    }
+    if (force || zone != waveform_zone_)
+    {
+        waveform_zone_ = zone;
+        for (size_t v = 0; v < kNumVoices; v++)
+        {
+            oscs_[v].SetWaveform(kWaveformZones[zone]);
+        }
+    }
+
+    // Detune spread: non-root voices at +d / -d / +2d cents; the root voice
+    // stays true so CV_OUT 1V/oct tracking is unaffected
+    if (force || combo_.HasChanged(SlotIndex(ComboSlot::DETUNE)))
+    {
+        const float d = kMaxDetuneCents *
+                        static_cast<float>(combo_.GetValue(SlotIndex(ComboSlot::DETUNE))) /
+                        static_cast<float>(POT_MAX);
+        detune_mult_[0] = 1.0f;
+        detune_mult_[1] = std::exp2(d / 1200.0f);
+        detune_mult_[2] = std::exp2(-d / 1200.0f);
+        detune_mult_[3] = std::exp2(2.0f * d / 1200.0f);
+    }
+
+    // Strum humanize: applied at the next chord fire
+    humanize_ = static_cast<float>(combo_.GetValue(SlotIndex(ComboSlot::HUMANIZE))) /
+                static_cast<float>(POT_MAX);
+
+    // Attack time
+    if (force || combo_.HasChanged(SlotIndex(ComboSlot::ATTACK)))
+    {
+        const float attack_time = curve_map(combo_.GetValue(SlotIndex(ComboSlot::ATTACK)), kMapAttack, MapClamp::TRUE);
+        for (size_t v = 0; v < kNumVoices; v++)
+        {
+            envs_[v].SetAttackTime(attack_time);
+        }
+    }
+}
+
 void AppSummoner::UiLoop()
 {
     if (do_fire_)
@@ -276,6 +348,7 @@ void AppSummoner::UiLoop()
     }
 
     ProcessComboLayer();
+    ApplyComboSlots(false);
 
     // While the combo is held the physical pots belong to the fourth layer —
     // pausing ReadValue() keeps the SHIFT/MODE FancyPots from picking them up.
