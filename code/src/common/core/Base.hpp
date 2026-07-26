@@ -178,6 +178,17 @@ public:
     }
 
     /**
+     * @brief Restarts the SHIFT+MODE held-still counter (the Advanced Settings /
+     *        memory reset hold timers).
+     * @note For apps with SHIFT+MODE combo knob gestures: pot movement while the
+     *       combo is held cancels the hold timers (see CHORD-GEN.md button gestures).
+     */
+    inline void RestartShiftModeHoldTimer()
+    {
+        shift_and_mode_pressed_count_ = 0;
+    }
+
+    /**
      * @brief Returns previous layer
      * @return Hardware::Layer Previous layer
      */

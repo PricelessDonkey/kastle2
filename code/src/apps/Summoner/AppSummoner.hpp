@@ -13,6 +13,7 @@
 #include "common/dsp/utility/EdgeDetector.hpp"
 #include "common/dsp/utility/Quantizer.hpp"
 #include "SummonerChords.hpp"
+#include "SummonerComboLayer.hpp"
 #include "SummonerStrum.hpp"
 #include "SummonerVoiceEnv.hpp"
 
@@ -94,11 +95,35 @@ private:
     };
 
     /**
+     * @brief SHIFT+BANK fourth-layer slots (CHORD-GEN.md SHIFT+BANK column),
+     *        index = pot number - 1.
+     */
+    enum class ComboSlot
+    {
+        DETUNE,      ///< POT_1: voice detune / spread
+        WAVEFORM,    ///< POT_2: voice waveform select (sine/tri/saw/square)
+        HUMANIZE,    ///< POT_3: strum timing jitter per chord fire
+        ATTACK,      ///< POT_4: envelope attack time
+        FX_B_PARAM,  ///< POT_5: FX B parameter (stub until Phase 8)
+        NOISE_BLEND, ///< POT_6: white-noise blend (stub until Phase 6)
+        FX_B_MIX,    ///< POT_7: FX B mix (stub until Phase 8)
+        COUNT
+    };
+    static_assert(static_cast<size_t>(ComboSlot::COUNT) == SummonerComboLayer::kNumSlots);
+
+    /**
      * @brief Computes the chord from the current root/quality/voicing, sets the
      *        voice frequencies and schedules the strum. Called from UiLoop on a
      *        chord-fire event (clock tick or TRIG edge).
      */
     void FireChord();
+
+    /**
+     * @brief Runs the SHIFT+BANK fourth-layer state machine for one UI pass:
+     *        feeds SummonerComboLayer, enforces the pot-movement-cancels-hold
+     *        rule and latches the underlying layers' pots on release.
+     */
+    void ProcessComboLayer();
 
     bool inited_ = false;
 
@@ -116,5 +141,8 @@ private:
     // Pots
     EnumArray<Pot, std::unique_ptr<FancyPot>> pots_;
     q15_t volume_ = 0;
+
+    // SHIFT+BANK fourth layer
+    SummonerComboLayer combo_;
 };
 }

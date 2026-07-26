@@ -31,6 +31,17 @@ constexpr auto kMapStrum = MapDef<int32_t, 5>{
     {pot(0.0f), pot(0.25f), pot(0.5f), pot(0.75f), pot(1.0f)},
     {0, 352, 1320, 3520, SummonerStrum::kMaxStrumFrames}};
 
+// SHIFT+BANK fourth-layer slot -> physical pot (index = ComboSlot)
+constexpr std::array<Hardware::Pot, SummonerComboLayer::kNumSlots> kComboSlotPots = {
+    Hardware::Pot::POT_1,
+    Hardware::Pot::POT_2,
+    Hardware::Pot::POT_3,
+    Hardware::Pot::POT_4,
+    Hardware::Pot::POT_5,
+    Hardware::Pot::POT_6,
+    Hardware::Pot::POT_7,
+};
+
 }
 
 void AppSummoner::Init()
@@ -130,6 +141,8 @@ void AppSummoner::Init()
         pot->Init(AUDIO_LOOP_RATE);
     }
 
+    combo_.Init();
+
     inited_ = true;
 }
 
@@ -215,6 +228,35 @@ void AppSummoner::FireChord()
     strum_.Fire(strum_frames, static_cast<SummonerStrum::Direction>(dir_index), 0.0f);
 }
 
+void AppSummoner::ProcessComboLayer()
+{
+    const bool combo_pressed = Kastle2::hw.Pressed(Hardware::Button::SHIFT) &&
+                               Kastle2::hw.Pressed(Hardware::Button::MODE);
+
+    std::array<int32_t, SummonerComboLayer::kNumSlots> raw;
+    for (size_t s = 0; s < SummonerComboLayer::kNumSlots; s++)
+    {
+        raw[s] = Kastle2::hw.GetRawPotValue(kComboSlotPots[s]);
+    }
+    combo_.Process(combo_pressed, raw);
+
+    if (combo_.IsActive() && combo_.AnyEngaged())
+    {
+        // Pot movement while both buttons are held cancels the hold's
+        // press-actions and timers (CHORD-GEN.md button gestures): no tap
+        // tempo, no Advanced Settings entry, no memory reset
+        Kastle2::base.GetClock().ClearTaps();
+        Kastle2::base.RestartShiftModeHoldTimer();
+    }
+
+    if (combo_.JustEnded() && combo_.AnyEngaged())
+    {
+        // Latch the underlying SHIFT/MODE-layer pots so the combo movement
+        // doesn't leak into them once one button is released
+        Kastle2::hw.FreezePots();
+    }
+}
+
 void AppSummoner::UiLoop()
 {
     if (do_fire_)
@@ -223,9 +265,16 @@ void AppSummoner::UiLoop()
         do_fire_ = false;
     }
 
-    for (auto &pot : pots_)
+    ProcessComboLayer();
+
+    // While the combo is held the physical pots belong to the fourth layer —
+    // pausing ReadValue() keeps the SHIFT/MODE FancyPots from picking them up
+    if (!combo_.IsActive())
     {
-        pot->ReadValue();
+        for (auto &pot : pots_)
+        {
+            pot->ReadValue();
+        }
     }
 
     volume_ = pot_to_q15(pots_[Pot::VOLUME]->GetValue());
@@ -250,5 +299,6 @@ void AppSummoner::UiLoop()
     sustain_gate_ = (Kastle2::hw.GetFeedValue(Hardware::AnalogInput::FEED_1) == Hardware::FeedValue::HIGH);
 
     Kastle2::hw.SetLed(Hardware::Led::LED_1, WS2812::GREEN);
-    Kastle2::hw.SetLed(Hardware::Led::LED_2, WS2812::BLUE);
+    // LED_2 white while the SHIFT+BANK fourth layer is held (proper LED design is Phase 9)
+    Kastle2::hw.SetLed(Hardware::Led::LED_2, combo_.IsActive() ? WS2812::WHITE : WS2812::BLUE);
 }
