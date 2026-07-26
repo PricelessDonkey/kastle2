@@ -20,10 +20,16 @@ constexpr uint32_t kStrumSeed = 0x50111011;
 // Pitch offset (POT_1) range: +-1 octave around center
 constexpr float kPitchOffsetOctaves = 1.0f;
 
-// Decay/length (POT_4 + LENGTH MOD CV): short pluck to long pad
+// Decay/length (POT_4 + attenuated LENGTH MOD CV): short pluck to long pad
 constexpr auto kMapDecay = MapDef<float, 5>{
     {pot(0.0f), pot(0.25f), pot(0.5f), pot(0.75f), pot(1.0f)},
     {0.03f, 0.12f, 0.4f, 1.2f, 4.0f}};
+
+// Strum speed (POT_3): frames between adjacent voices, 0 -> 300ms at 44kHz
+// (per the CHORD-GEN.md strum table: 0 / ~8ms / ~30ms / ~80ms / ~300ms)
+constexpr auto kMapStrum = MapDef<int32_t, 5>{
+    {pot(0.0f), pot(0.25f), pot(0.5f), pot(0.75f), pot(1.0f)},
+    {0, 352, 1320, 3520, SummonerStrum::kMaxStrumFrames}};
 
 }
 
@@ -50,24 +56,79 @@ void AppSummoner::Init()
     quantizer_.SetEnabled(true);
     quantizer_.SetScale(Quantizer::DefaultScale::CHROMATIC);
 
-    volume_pot_ = FancyPot::Create({
+    // Normal layer
+    pots_[Pot::VOLUME] = FancyPot::Create({
         .pot = Hardware::Pot::POT_5,
         .layer = Hardware::Layer::NORMAL,
     });
-    volume_pot_->Init(AUDIO_LOOP_RATE);
 
-    pitch_pot_ = FancyPot::Create({
+    pots_[Pot::PITCH_OFFSET] = FancyPot::Create({
         .pot = Hardware::Pot::POT_1,
         .layer = Hardware::Layer::NORMAL,
         .deadzone = true,
     });
-    pitch_pot_->Init(AUDIO_LOOP_RATE);
 
-    decay_pot_ = FancyPot::Create({
+    pots_[Pot::DECAY] = FancyPot::Create({
         .pot = Hardware::Pot::POT_4,
         .layer = Hardware::Layer::NORMAL,
     });
-    decay_pot_->Init(AUDIO_LOOP_RATE);
+
+    pots_[Pot::VOICING] = FancyPot::Create({
+        .pot = Hardware::Pot::POT_2,
+        .layer = Hardware::Layer::NORMAL,
+        .initial_value = POT_MIN, // close voicing on power-up
+    });
+
+    pots_[Pot::STRUM_SPEED] = FancyPot::Create({
+        .pot = Hardware::Pot::POT_3,
+        .layer = Hardware::Layer::NORMAL,
+        .initial_value = POT_MIN, // block chords on power-up
+    });
+
+    pots_[Pot::QUALITY] = FancyPot::Create({
+        .pot = Hardware::Pot::POT_6,
+        .layer = Hardware::Layer::NORMAL,
+        .initial_value = POT_MIN, // major on power-up
+    });
+
+    // Shift layer
+    pots_[Pot::PORTAMENTO] = FancyPot::Create({
+        .pot = Hardware::Pot::POT_1,
+        .layer = Hardware::Layer::SHIFT,
+        .initial_value = POT_MIN, // no glide until Phase 4 wires it
+    });
+
+    pots_[Pot::STRUM_DIR] = FancyPot::Create({
+        .pot = Hardware::Pot::POT_3,
+        .layer = Hardware::Layer::SHIFT,
+        .initial_value = POT_MIN, // low -> high default
+        .map_size = static_cast<size_t>(SummonerStrum::Direction::COUNT),
+    });
+
+    pots_[Pot::LENGTH_ATTEN] = FancyPot::Create({
+        .pot = Hardware::Pot::POT_4,
+        .layer = Hardware::Layer::SHIFT,
+        .initial_value = POT_MAX, // LENGTH MOD CV fully active by default
+    });
+
+    pots_[Pot::CUTOFF] = FancyPot::Create({
+        .pot = Hardware::Pot::POT_6,
+        .layer = Hardware::Layer::SHIFT,
+        .initial_value = POT_MAX, // filter open; placeholder until Phase 6
+    });
+
+    // Mode (BANK) layer
+    pots_[Pot::SCALE] = FancyPot::Create({
+        .pot = Hardware::Pot::POT_1,
+        .layer = Hardware::Layer::MODE,
+        .initial_value = POT_HALF, // middle of the scale table = chromatic
+        .map_size = quantizer_.GetScaleTableSize(),
+    });
+
+    for (auto &pot : pots_)
+    {
+        pot->Init(AUDIO_LOOP_RATE);
+    }
 
     inited_ = true;
 }
@@ -115,9 +176,10 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
         output[2 * i + 1] = sample;
     }
 
-    volume_pot_->Process();
-    pitch_pot_->Process();
-    decay_pot_->Process();
+    for (auto &pot : pots_)
+    {
+        pot->Process();
+    }
 }
 
 void AppSummoner::FireChord()
@@ -125,20 +187,32 @@ void AppSummoner::FireChord()
     // Root: FREE NOTE 1V/oct, sampled at fire time (stock convention for PITCH_2),
     // transposed by the POT_1 offset (+-1 octave, center = no transpose)
     const int32_t note_cv = Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PITCH_2);
-    const float offset = static_cast<float>(pitch_pot_->GetValue() - pot(0.5f)) / static_cast<float>(pot(0.5f));
+    const float offset = static_cast<float>(pots_[Pot::PITCH_OFFSET]->GetValue() - pot(0.5f)) / static_cast<float>(pot(0.5f));
     float root = cv_to_freq_raw(kRootBase, note_cv);
     root *= std::pow(2.0f, offset * kPitchOffsetOctaves);
 
+    // Quality: POT_6 zones (0/15/30/45/60/75/85/100% per the design table)
+    const auto quality = SummonerChords::QualityFromQ15(pot_to_q15(pots_[Pot::QUALITY]->GetValue()));
+
+    // Voicing: POT_2 continuous interpolation close -> open -> extended
+    const float voicing = static_cast<float>(pots_[Pot::VOICING]->GetValue()) / static_cast<float>(POT_MAX);
+
     std::array<float, kNumVoices> frequencies;
-    SummonerChords::ComputeChord(root, SummonerChords::Quality::MAJOR, 0.0f,
-                                 quantizer_, frequencies);
+    SummonerChords::ComputeChord(root, quality, voicing, quantizer_, frequencies);
 
     for (size_t v = 0; v < kNumVoices; v++)
     {
         oscs_[v].SetFrequency(fmin(frequencies[v], kMaxPitchHz));
     }
 
-    strum_.Fire(0, SummonerStrum::Direction::LOW_TO_HIGH, 0.0f);
+    // Strum: speed from POT_3, direction from SHIFT+POT_3
+    const int32_t strum_frames = curve_map(pots_[Pot::STRUM_SPEED]->GetValue(), kMapStrum, MapClamp::TRUE);
+    int32_t dir_index = pots_[Pot::STRUM_DIR]->GetMappedValue();
+    if (dir_index < 0)
+    {
+        dir_index = 0;
+    }
+    strum_.Fire(strum_frames, static_cast<SummonerStrum::Direction>(dir_index), 0.0f);
 }
 
 void AppSummoner::UiLoop()
@@ -149,14 +223,22 @@ void AppSummoner::UiLoop()
         do_fire_ = false;
     }
 
-    volume_pot_->ReadValue();
-    pitch_pot_->ReadValue();
-    decay_pot_->ReadValue();
-    volume_ = pot_to_q15(volume_pot_->GetValue());
+    for (auto &pot : pots_)
+    {
+        pot->ReadValue();
+    }
 
-    // Decay/length: POT_4 summed with LENGTH MOD CV (PARAM_3), same time on all voices
-    const int32_t decay_val = decay_pot_->GetValue()
-                              + Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PARAM_3);
+    volume_ = pot_to_q15(pots_[Pot::VOLUME]->GetValue());
+
+    // Quantizer scale: BANK+POT_1 stepped over the default scale table
+    const int32_t scale_index = pots_[Pot::SCALE]->GetMappedValue();
+    quantizer_.SetScale(scale_index >= 0 ? scale_index : 0);
+
+    // Decay/length: POT_4 summed with LENGTH MOD CV (PARAM_3) attenuated by
+    // SHIFT+POT_4, same time on all voices
+    const int32_t decay_cv = apply_pot_mod(Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PARAM_3),
+                                           pots_[Pot::LENGTH_ATTEN]->GetValue());
+    const int32_t decay_val = pots_[Pot::DECAY]->GetValue() + decay_cv;
     const float decay_time = curve_map(decay_val, kMapDecay, MapClamp::TRUE);
     for (size_t v = 0; v < kNumVoices; v++)
     {

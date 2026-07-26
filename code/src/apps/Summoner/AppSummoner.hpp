@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include "common/EnumTools.hpp"
 #include "common/core/App.hpp"
 #include "common/core/Kastle2.hpp"
 #include "common/controls/FancyPot.hpp"
@@ -71,6 +72,28 @@ private:
     static constexpr size_t kNumVoices = SummonerChords::kNumVoices;
 
     /**
+     * @brief All FancyPot-managed knob functions (NORMAL / SHIFT / MODE layers
+     *        per the CHORD-GEN.md knob table). POT_7 (LFO rate, SHIFT = tempo)
+     *        stays with Base. The SHIFT+BANK fourth layer is app-managed —
+     *        Hardware::Layer has no combo state, so FancyPot can't serve it.
+     */
+    enum class Pot
+    {
+        VOLUME,       ///< POT_5 primary: output volume
+        PITCH_OFFSET, ///< POT_1 primary: chord root transpose (+-1 octave)
+        DECAY,        ///< POT_4 primary: decay / note length
+        VOICING,      ///< POT_2 primary: voicing sweep close -> open -> extended
+        STRUM_SPEED,  ///< POT_3 primary: strum, 0 = block chord, max = slow arpeggio
+        QUALITY,      ///< POT_6 primary: chord quality zones (major ... dim)
+        PORTAMENTO,   ///< SHIFT+POT_1: portamento time (glide wired in Phase 4)
+        STRUM_DIR,    ///< SHIFT+POT_3: strum direction (3-way stepped)
+        LENGTH_ATTEN, ///< SHIFT+POT_4: LENGTH MOD CV attenuation
+        CUTOFF,       ///< SHIFT+POT_6: filter cutoff (filter arrives in Phase 6)
+        SCALE,        ///< BANK+POT_1: quantizer scale select
+        COUNT
+    };
+
+    /**
      * @brief Computes the chord from the current root/quality/voicing, sets the
      *        voice frequencies and schedules the strum. Called from UiLoop on a
      *        chord-fire event (clock tick or TRIG edge).
@@ -91,9 +114,7 @@ private:
     bool sustain_gate_ = false;
 
     // Pots
-    std::unique_ptr<FancyPot> volume_pot_;
-    std::unique_ptr<FancyPot> pitch_pot_;
-    std::unique_ptr<FancyPot> decay_pot_;
+    EnumArray<Pot, std::unique_ptr<FancyPot>> pots_;
     q15_t volume_ = 0;
 };
 }
