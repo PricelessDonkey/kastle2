@@ -7,6 +7,7 @@
 #include "common/EnumTools.hpp"
 #include "common/core/App.hpp"
 #include "common/core/Kastle2.hpp"
+#include "common/controls/FancyMode.hpp"
 #include "common/controls/FancyPot.hpp"
 #include "common/dsp/math/qmath.hpp"
 #include "common/dsp/synthesis/OscillatorQ15.hpp"
@@ -144,5 +145,34 @@ private:
 
     // SHIFT+BANK fourth layer
     SummonerComboLayer combo_;
+
+    /**
+     * @brief FX B slot states (Phase 8 wires the actual effects), cycled by a
+     *        BANK press-release with no knob turn. The reverb is independent
+     *        and never part of this cycle.
+     */
+    enum class FxB
+    {
+        OFF,
+        DELAY,
+        CRUSH,
+        BOTH,
+        COUNT
+    };
+
+    /** @brief FX B selector: BANK press-release cycles it; movement/timeout cancels. */
+    FancyMode fx_mode_ = FancyMode(FancyMode::Config{
+        .modes_count = static_cast<uint32_t>(FxB::COUNT),
+        .input_reading = FancyMode::InputReading::NONE});
+
+    FxB fx_b_ = FxB::OFF;
+
+    /** @brief LED feedback colors per FX B state (LED design pass is Phase 9). */
+    EnumArray<FxB, uint32_t> fx_colors_ = {
+        WS2812::GREEN,          // OFF — matches the current default LED
+        WS2812::MEDIUM_CYAN,    // DELAY
+        WS2812::ORANGE,         // CRUSH
+        WS2812::MEDIUM_MAGENTA, // DELAY + CRUSH
+    };
 };
 }

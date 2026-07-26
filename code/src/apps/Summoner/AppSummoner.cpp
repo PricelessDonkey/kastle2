@@ -31,6 +31,10 @@ constexpr auto kMapStrum = MapDef<int32_t, 5>{
     {pot(0.0f), pot(0.25f), pot(0.5f), pot(0.75f), pot(1.0f)},
     {0, 352, 1320, 3520, SummonerStrum::kMaxStrumFrames}};
 
+// A BANK press only cycles FX B when released within this time (and with no
+// knob turn) — same gesture timing as the stock apps' bank/mode buttons
+constexpr uint32_t kModeShortPressUnder = s2alr(1.5f);
+
 // SHIFT+BANK fourth-layer slot -> physical pot (index = ComboSlot)
 constexpr std::array<Hardware::Pot, SummonerComboLayer::kNumSlots> kComboSlotPots = {
     Hardware::Pot::POT_1,
@@ -143,6 +147,11 @@ void AppSummoner::Init()
 
     combo_.Init();
 
+    // FX B cycle: BANK press-release with no turn; a MODE-layer pot move or a
+    // long hold cancels the pending change (stock bank-button coexistence rule)
+    fx_mode_.Init();
+    fx_mode_.DisableNextChangeWhen(pots_, kModeShortPressUnder);
+
     inited_ = true;
 }
 
@@ -193,6 +202,7 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
     {
         pot->Process();
     }
+    fx_mode_.Process();
 }
 
 void AppSummoner::FireChord()
@@ -268,13 +278,21 @@ void AppSummoner::UiLoop()
     ProcessComboLayer();
 
     // While the combo is held the physical pots belong to the fourth layer —
-    // pausing ReadValue() keeps the SHIFT/MODE FancyPots from picking them up
-    if (!combo_.IsActive())
+    // pausing ReadValue() keeps the SHIFT/MODE FancyPots from picking them up.
+    // FancyMode is paused too: its MODE-layer SHIFT-press branch (stock
+    // "previous bank") and its release-cycle must not fire on combo gestures.
+    if (combo_.IsActive())
+    {
+        fx_mode_.DisableNextChange();
+    }
+    else
     {
         for (auto &pot : pots_)
         {
             pot->ReadValue();
         }
+        fx_mode_.ReadValue();
+        fx_b_ = static_cast<FxB>(fx_mode_.GetMode());
     }
 
     volume_ = pot_to_q15(pots_[Pot::VOLUME]->GetValue());
@@ -298,7 +316,7 @@ void AppSummoner::UiLoop()
     // ~9ms worst-case latency — fine for a sustain toggle)
     sustain_gate_ = (Kastle2::hw.GetFeedValue(Hardware::AnalogInput::FEED_1) == Hardware::FeedValue::HIGH);
 
-    Kastle2::hw.SetLed(Hardware::Led::LED_1, WS2812::GREEN);
+    Kastle2::hw.SetLed(Hardware::Led::LED_1, fx_colors_[fx_b_]);
     // LED_2 white while the SHIFT+BANK fourth layer is held (proper LED design is Phase 9)
     Kastle2::hw.SetLed(Hardware::Led::LED_2, combo_.IsActive() ? WS2812::WHITE : WS2812::BLUE);
 }

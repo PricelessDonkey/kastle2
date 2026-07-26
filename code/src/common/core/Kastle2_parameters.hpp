@@ -158,10 +158,13 @@ static constexpr uint32_t kBaseStartupFadeInDelay = s2alr(0.75f);
 static constexpr bool kBaseSyncThru = true;
 
 // To enter Advanced Settings
-static constexpr size_t kBaseTicksEnterSettings = s2alr(2); // 2 seconds
+// (custom firmwares: stock 2s -> 10s, so SHIFT+BANK knob-layer holds don't
+// trip it; pot movement also restarts the timer via RestartShiftModeHoldTimer)
+static constexpr size_t kBaseTicksEnterSettings = s2alr(10); // 10 seconds
 
 // To clear memory
-static constexpr size_t kBaseTicksClearMemory = s2alr(10); // 10 seconds
+// (custom firmwares: stock 10s -> 20s — moved because settings now sits at 10s)
+static constexpr size_t kBaseTicksClearMemory = s2alr(20); // 20 seconds
 
 // Pots running average
 static constexpr size_t kBasePotsRunningAverage = 8;
