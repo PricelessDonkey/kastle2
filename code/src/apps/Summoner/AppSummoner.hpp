@@ -189,6 +189,11 @@ private:
     /// per sample in AudioLoop (ExampleSynth pattern), written in UiLoop
     q15_t env_mix_ = 0;
 
+    /// GATE_OUT retrigger-gap countdown in samples: set at each chord fire,
+    /// run down in AudioLoop; the gate is forced low while it is positive so
+    /// every chord event produces a rising edge even when note tails overlap
+    int32_t gate_gap_samples_ = 0;
+
     // SHIFT+BANK fourth layer
     SummonerComboLayer combo_;
     int32_t waveform_zone_ = -1;                       ///< Cached waveform zone (-1 = not applied yet)

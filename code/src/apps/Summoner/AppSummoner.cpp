@@ -45,6 +45,11 @@ constexpr auto kMapPortamento = MapDef<float, 5>{
 // safely above unconnected-jack ADC noise)
 constexpr int32_t kVoicingSnapCvRelease = pot(0.02f);
 
+// GATE_OUT retrigger gap: every chord fire forces the gate low this long so
+// overlapping note tails still yield one rising edge per chord event —
+// downstream TRIG inputs sample at audio-block rate (~1.1ms), so ~5ms is safe
+constexpr int32_t kGateRetrigGapSamples = 220;
+
 // Attack time (SHIFT+BANK+POT_4): struck feel to slow pad swell
 constexpr auto kMapAttack = MapDef<float, 5>{
     {pot(0.0f), pot(0.25f), pot(0.5f), pot(0.75f), pot(1.0f)},
@@ -267,6 +272,11 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
 
         env_mix_ = static_cast<q15_t>(env_sum / static_cast<int32_t>(kNumVoices));
 
+        if (gate_gap_samples_ > 0)
+        {
+            gate_gap_samples_--;
+        }
+
         const q15_t sample = q15_mult(static_cast<q15_t>(mix / static_cast<int32_t>(kNumVoices)), volume_);
 
         output[2 * i] = sample;
@@ -318,6 +328,9 @@ void AppSummoner::FireChord()
         dir_index = 0;
     }
     strum_.Fire(strum_frames, static_cast<SummonerStrum::Direction>(dir_index), humanize_);
+
+    // Force a GATE_OUT low gap so this fire is a fresh rising edge downstream
+    gate_gap_samples_ = kGateRetrigGapSamples;
 }
 
 void AppSummoner::ProcessComboLayer()
@@ -515,13 +528,16 @@ void AppSummoner::UiLoop()
     sustain_gate_ = (Kastle2::hw.GetFeedValue(Hardware::AnalogInput::FEED_1) == Hardware::FeedValue::HIGH);
 
     // Chord gate: high while any voice is sounding (attack/decay, sustain hold
-    // or release ramp). SetGateOut handles GPIO 3's inverted logic internally.
+    // or release ramp), except during the post-fire retrigger gap — without the
+    // gap, overlapping note tails merge chords into one long high and a
+    // downstream TRIG input only ever sees the first edge (🎧 5, 2026-08-06).
+    // SetGateOut handles GPIO 3's inverted logic internally.
     bool any_sounding = false;
     for (const auto &env : envs_)
     {
         any_sounding = any_sounding || env.IsSounding();
     }
-    Kastle2::hw.SetGateOut(any_sounding);
+    Kastle2::hw.SetGateOut(any_sounding && gate_gap_samples_ <= 0);
 
     // Mix envelope out: q15 -> 10-bit PWM (attack pluck + decay tail as a real
     // modulation source; sustained full chord sits at ~60% of range)
