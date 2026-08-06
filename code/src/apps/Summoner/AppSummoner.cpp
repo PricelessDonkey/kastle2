@@ -503,6 +503,15 @@ void AppSummoner::UiLoop()
     // ~9ms worst-case latency — fine for a sustain toggle)
     sustain_gate_ = (Kastle2::hw.GetFeedValue(Hardware::AnalogInput::FEED_1) == Hardware::FeedValue::HIGH);
 
+    // Chord gate: high while any voice is sounding (attack/decay, sustain hold
+    // or release ramp). SetGateOut handles GPIO 3's inverted logic internally.
+    bool any_sounding = false;
+    for (const auto &env : envs_)
+    {
+        any_sounding = any_sounding || env.IsSounding();
+    }
+    Kastle2::hw.SetGateOut(any_sounding);
+
     Kastle2::hw.SetLed(Hardware::Led::LED_1, fx_colors_[fx_b_]);
     // LED_2 white while the SHIFT+BANK fourth layer is held (proper LED design is Phase 9)
     Kastle2::hw.SetLed(Hardware::Led::LED_2, combo_.IsActive() ? WS2812::WHITE : WS2812::BLUE);

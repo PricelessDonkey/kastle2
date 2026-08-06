@@ -133,3 +133,36 @@ TEST(AdsrEnv_SetAttackTimeMidAttack_ContinuesFromCurrentValue)
     }
     ASSERT_TRUE(out > static_cast<q31_t>(Q31_MAX * 0.95f));
 }
+
+TEST(SummonerVoiceEnv_IsSounding_TracksVoiceLife)
+{
+    // GATE_OUT is high while any voice is sounding (CHORD-GEN.md outputs) —
+    // IsSounding must cover attack/decay, the sustain hold, the release ramp,
+    // and go false once the voice is truly silent.
+    SummonerVoiceEnv e;
+    e.Init(kSr);
+    e.SetAttackTime(0.002f);
+    e.SetDecayTime(0.05f);
+
+    ASSERT_FALSE(e.IsSounding()); // idle at power-on
+
+    e.Trigger();
+    ASSERT_TRUE(e.IsSounding()); // pending trigger counts (gate must not lag the fire)
+    Run(e, static_cast<int>(kSr * 0.01f), false);
+    ASSERT_TRUE(e.IsSounding()); // mid-envelope
+
+    // Fully decayed with no gate: silent.
+    Run(e, static_cast<int>(kSr * 0.5f), false);
+    ASSERT_FALSE(e.IsSounding());
+
+    // Sustain hold keeps it sounding long past the decay time...
+    e.Trigger();
+    Run(e, static_cast<int>(kSr), true);
+    ASSERT_TRUE(e.IsSounding());
+
+    // ...and the release ramp still counts as sounding until it lands.
+    ASSERT_TRUE(Run(e, 10, false) > 0);
+    ASSERT_TRUE(e.IsSounding());
+    Run(e, static_cast<int>(kSr * 0.5f), false);
+    ASSERT_FALSE(e.IsSounding());
+}
