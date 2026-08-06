@@ -185,6 +185,10 @@ private:
     EnumArray<Pot, std::unique_ptr<FancyPot>> pots_;
     q15_t volume_ = 0;
 
+    /// Mix envelope for ENV_OUT: sum of the 4 voice envelopes / 4, captured
+    /// per sample in AudioLoop (ExampleSynth pattern), written in UiLoop
+    q15_t env_mix_ = 0;
+
     // SHIFT+BANK fourth layer
     SummonerComboLayer combo_;
     int32_t waveform_zone_ = -1;                       ///< Cached waveform zone (-1 = not applied yet)

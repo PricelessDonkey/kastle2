@@ -252,6 +252,7 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
     {
         const uint32_t fired = strum_.Tick();
         int32_t mix = 0;
+        int32_t env_sum = 0;
 
         for (size_t v = 0; v < kNumVoices; v++)
         {
@@ -259,9 +260,12 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
             {
                 envs_[v].Trigger();
             }
-            const q15_t osc_out = oscs_[v].Process();
-            mix += q15_mult(osc_out, q31_to_q15(envs_[v].Process(sustain_gate_)));
+            const q15_t env = q31_to_q15(envs_[v].Process(sustain_gate_));
+            env_sum += env;
+            mix += q15_mult(oscs_[v].Process(), env);
         }
+
+        env_mix_ = static_cast<q15_t>(env_sum / static_cast<int32_t>(kNumVoices));
 
         const q15_t sample = q15_mult(static_cast<q15_t>(mix / static_cast<int32_t>(kNumVoices)), volume_);
 
@@ -511,6 +515,10 @@ void AppSummoner::UiLoop()
         any_sounding = any_sounding || env.IsSounding();
     }
     Kastle2::hw.SetGateOut(any_sounding);
+
+    // Mix envelope out: q15 -> 10-bit PWM (attack pluck + decay tail as a real
+    // modulation source; sustained full chord sits at ~60% of range)
+    Kastle2::hw.SetEnvOut(static_cast<int32_t>(env_mix_) >> (15 - 10));
 
     Kastle2::hw.SetLed(Hardware::Led::LED_1, fx_colors_[fx_b_]);
     // LED_2 white while the SHIFT+BANK fourth layer is held (proper LED design is Phase 9)
