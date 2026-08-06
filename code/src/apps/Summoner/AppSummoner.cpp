@@ -486,6 +486,13 @@ void AppSummoner::UiLoop()
         oscs_[v].SetFrequency(fmin(voice_freq_[v] * glide_ratio * detune_mult_[v], kMaxPitchHz));
     }
 
+    // Root pitch 1V/oct out: the sounding root — quantized and glided, detune
+    // never applies to voice 0 — with C3 (kRootBase, the 0V-CV root) = 0V out.
+    // DAC_1V is USB-power calibration only (HARDWARE.md); roots below C3 clamp
+    // to 0V inside SetCvOut.
+    const float root_octaves = std::log2(voice_freq_[0] * glide_ratio / kRootBase);
+    Kastle2::hw.SetCvOut(static_cast<int32_t>(root_octaves * static_cast<float>(DAC_1V) + 0.5f));
+
     volume_ = pot_to_q15(pots_[Pot::VOLUME]->GetValue());
 
     // Quantizer scale: BANK+POT_1 stepped over the default scale table
