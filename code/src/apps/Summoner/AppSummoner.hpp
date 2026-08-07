@@ -9,8 +9,11 @@
 #include "common/core/Kastle2.hpp"
 #include "common/controls/FancyMode.hpp"
 #include "common/controls/FancyPot.hpp"
+#include "common/dsp/effects/SoftClipper.hpp"
+#include "common/dsp/filters/Svf.hpp"
 #include "common/dsp/math/qmath.hpp"
 #include "common/dsp/synthesis/OscillatorQ15.hpp"
+#include "common/dsp/synthesis/WhiteNoise.hpp"
 #include "common/dsp/utility/EdgeDetector.hpp"
 #include "common/dsp/utility/EuclideanPattern.hpp"
 #include "common/dsp/utility/Portamento.hpp"
@@ -100,10 +103,12 @@ private:
         PORTAMENTO,   ///< SHIFT+POT_1: portamento time on the chord root
         STRUM_DIR,    ///< SHIFT+POT_3: strum direction (3-way stepped)
         LENGTH_ATTEN, ///< SHIFT+POT_4: LENGTH MOD CV attenuation
-        CUTOFF,       ///< SHIFT+POT_6: filter cutoff (filter arrives in Phase 6)
+        CUTOFF,       ///< SHIFT+POT_6: filter cutoff
         SCALE,        ///< BANK+POT_1: quantizer scale select
+        FILTER_ENV,   ///< BANK+POT_2: filter env amount (bipolar, center off)
         DENSITY,      ///< BANK+POT_3: euclidean density 0 -> K (0 = sequencer silent)
         LENGTH,       ///< BANK+POT_4: euclidean cycle length K (stepped, 2-16)
+        RESONANCE,    ///< BANK+POT_6: filter resonance
         COUNT
     };
 
@@ -118,7 +123,7 @@ private:
         HUMANIZE,    ///< POT_3: strum timing jitter per chord fire
         ATTACK,      ///< POT_4: envelope attack time
         FX_B_PARAM,  ///< POT_5: FX B parameter (stub until Phase 8)
-        NOISE_BLEND, ///< POT_6: white-noise blend (stub until Phase 6)
+        NOISE_BLEND, ///< POT_6: white-noise blend into the voices (equal-power)
         FX_B_MIX,    ///< POT_7: FX B mix (stub until Phase 8)
         COUNT
     };
@@ -159,6 +164,21 @@ private:
     std::array<SummonerVoiceEnv, kNumVoices> envs_;
     SummonerStrum strum_;
     Quantizer quantizer_;
+
+    /// Per-voice noise sources for the SHIFT+BANK+POT_6 blend — distinct seeds
+    /// so the blended noise isn't phase-locked across voices (CHORD-GEN.md
+    /// Noise blend: identical streams read as a flangey artifact, not texture)
+    std::array<WhiteNoise, kNumVoices> noises_;
+
+    /// Equal-power blend gains (common/dsp/synthesis/NoiseBlend.hpp), computed
+    /// on slot change in ApplyComboSlots — the trig stays out of AudioLoop
+    q15_t noise_dry_gain_ = Q15_MAX;
+    q15_t noise_wet_gain_ = 0;
+
+    // Core 0 effects chain (Phase 6): mix -> SoftClipper -> Svf LP -> volume.
+    // Moves to Core 1 wholesale with the reverb in Phase 7.
+    SoftClipper clipper_;
+    Svf filter_;
 
     // Chord-fire path
     EdgeDetector trigger_detect_ = EdgeDetector(EdgeDetector::Type::RISING);

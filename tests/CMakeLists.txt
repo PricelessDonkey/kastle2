@@ -59,6 +59,7 @@ set(TEST_SOURCES
     dsp/test_summoner_chords.cpp
     dsp/test_summoner_sequencer.cpp
     dsp/test_summoner_strum.cpp
+    dsp/test_summoner_timbre.cpp
     dsp/test_summoner_voice_env.cpp
     main.cpp
 )

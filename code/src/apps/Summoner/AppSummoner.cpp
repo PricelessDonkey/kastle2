@@ -2,7 +2,9 @@
 #include <cmath>
 #include <cstdlib>
 #include "common/core/Kastle2.hpp"
+#include "common/dsp/synthesis/NoiseBlend.hpp"
 #include "common/utils.hpp"
+#include "SummonerTimbre.hpp"
 
 using namespace kastle2;
 
@@ -66,6 +68,31 @@ constexpr std::array<Oscillator::Waveform, 4> kWaveformZones = {
 // Raw slot value (0-4095) whose zone is SAW — the power-on default waveform
 constexpr int32_t kWaveformDefaultSlotValue = 2560;
 
+// Fixed SoftClipper drive — "warmth before filter" (CHORD-GEN.md effects
+// chain), no control mapped. Sits in WaveBard's warm range (its distortion
+// map reaches q15(0.04) at 85% of the FX pot); compensation keeps level flat
+constexpr q15_t kClipperDrive = q15(0.02f);
+
+// Filter cutoff (SHIFT+POT_6): log sweep, ceiling well under Svf's rate/3 limit
+constexpr auto kMapCutoff = MapDef<float, 5>{
+    {pot(0.0f), pot(0.25f), pot(0.5f), pot(0.75f), pot(1.0f)},
+    {50.0f, 200.0f, 800.0f, 3200.0f, SummonerTimbre::kMaxCutoffHz}};
+
+// Filter resonance (BANK+POT_6): same span as ExampleSynth's kMapResonance —
+// 0.1 floor (Svf warns below 0.005), 0.95 max stays stable
+constexpr auto kMapResonance = MapDef<float, 3>{
+    {pot(0.0f), pot(0.5f), pot(1.0f)},
+    {0.1f, 0.6f, 0.95f}};
+
+// Per-voice noise seeds — distinct nonzero constants so the four blend
+// streams are uncorrelated (golden-ratio stride; values are arbitrary)
+constexpr std::array<uint32_t, 4> kNoiseSeeds = {
+    0x600D5EED,
+    0x600D5EED + 0x9E3779B9,
+    0x600D5EED + 2 * 0x9E3779B9,
+    0x600D5EED + 3 * 0x9E3779B9,
+};
+
 // SHIFT+BANK fourth-layer slot -> physical pot (index = ComboSlot)
 constexpr std::array<Hardware::Pot, SummonerComboLayer::kNumSlots> kComboSlotPots = {
     Hardware::Pot::POT_1,
@@ -94,7 +121,16 @@ void AppSummoner::Init()
         oscs_[v].SetWaveform(Oscillator::Waveform::SAW);
         oscs_[v].SetFrequency(kRootBase);
         envs_[v].Init(SAMPLE_RATE);
+        noises_[v].Seed(kNoiseSeeds[v]);
     }
+
+    clipper_.Init(SAMPLE_RATE);
+    clipper_.SetDrive(kClipperDrive);
+
+    filter_.Init(SAMPLE_RATE);
+    filter_.SetType(Svf::Type::LOWPASS);
+    filter_.SetFrequency(SummonerTimbre::kMaxCutoffHz); // open until UiLoop takes over
+    filter_.SetResonance(0.1f);
 
     strum_.Init(kStrumSeed);
     voice_freq_.fill(kRootBase);
@@ -167,7 +203,7 @@ void AppSummoner::Init()
     pots_[Pot::CUTOFF] = FancyPot::Create({
         .pot = Hardware::Pot::POT_6,
         .layer = Hardware::Layer::SHIFT,
-        .initial_value = POT_MAX, // filter open; placeholder until Phase 6
+        .initial_value = POT_MAX, // filter open on power-up
     });
 
     // Mode (BANK) layer
@@ -190,6 +226,18 @@ void AppSummoner::Init()
         .layer = Hardware::Layer::MODE,
         .initial_value = POT_MAX, // power-on default: 16 steps
         .map_size = SummonerSequencer::kLengthSteps,
+    });
+
+    pots_[Pot::FILTER_ENV] = FancyPot::Create({
+        .pot = Hardware::Pot::POT_2,
+        .layer = Hardware::Layer::MODE,
+        .deadzone = true, // bipolar env->cutoff amount, center = off
+    });
+
+    pots_[Pot::RESONANCE] = FancyPot::Create({
+        .pot = Hardware::Pot::POT_6,
+        .layer = Hardware::Layer::MODE,
+        .initial_value = POT_MIN, // no resonance on power-up
     });
 
     for (auto &pot : pots_)
@@ -262,12 +310,19 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
             }
             const q15_t env = q31_to_q15(envs_[v].Process(sustain_gate_));
             env_sum += env;
-            mix += q15_mult(oscs_[v].Process(), env);
+            // Equal-power noise blend, pre-envelope and pre-filter — the same
+            // envelope and cutoff shape both tone and noise together
+            const q15_t tone = q15_add(q15_mult(oscs_[v].Process(), noise_dry_gain_),
+                                       q15_mult(noises_[v].Process(), noise_wet_gain_));
+            mix += q15_mult(tone, env);
         }
 
         env_mix_ = static_cast<q15_t>(env_sum / static_cast<int32_t>(kNumVoices));
 
-        const q15_t sample = q15_mult(static_cast<q15_t>(mix / static_cast<int32_t>(kNumVoices)), volume_);
+        // Core 0 effects chain: mix -> SoftClipper (warmth) -> Svf LP -> volume
+        q15_t sample = static_cast<q15_t>(mix / static_cast<int32_t>(kNumVoices));
+        sample = filter_.Process(clipper_.Process(sample));
+        sample = q15_mult(sample, volume_);
 
         output[2 * i] = sample;
         output[2 * i + 1] = sample;
@@ -388,6 +443,15 @@ void AppSummoner::ApplyComboSlots(const bool force)
         detune_mult_[3] = std::exp2(2.0f * d / 1200.0f);
     }
 
+    // Noise blend: equal-power gains recomputed only on slot change so the
+    // trig calls stay out of the audio path
+    if (force || combo_.HasChanged(SlotIndex(ComboSlot::NOISE_BLEND)))
+    {
+        const q15_t blend = pot_to_q15(combo_.GetValue(SlotIndex(ComboSlot::NOISE_BLEND)));
+        noise_dry_gain_ = NoiseBlendGainDry(blend);
+        noise_wet_gain_ = NoiseBlendGainWet(blend);
+    }
+
     // Strum humanize: applied at the next chord fire
     humanize_ = static_cast<float>(combo_.GetValue(SlotIndex(ComboSlot::HUMANIZE))) /
                 static_cast<float>(POT_MAX);
@@ -494,6 +558,14 @@ void AppSummoner::UiLoop()
     Kastle2::hw.SetCvOut(static_cast<int32_t>(root_octaves * static_cast<float>(DAC_1V) + 0.5f));
 
     volume_ = pot_to_q15(pots_[Pot::VOLUME]->GetValue());
+
+    // Filter: cutoff (SHIFT+POT_6) modulated by the summed voice envelope per
+    // the bipolar env amount (BANK+POT_2, center off) — right of center chord
+    // hits open the filter, left of center they darken; resonance BANK+POT_6
+    const float cutoff_base = curve_map(pots_[Pot::CUTOFF]->GetValue(), kMapCutoff, MapClamp::TRUE);
+    const float env_amount = SummonerTimbre::EnvAmountFromPot(pots_[Pot::FILTER_ENV]->GetValue());
+    filter_.SetFrequency(SummonerTimbre::ModulatedCutoffHz(cutoff_base, env_amount, env_mix_));
+    filter_.SetResonance(curve_map(pots_[Pot::RESONANCE]->GetValue(), kMapResonance, MapClamp::TRUE));
 
     // Quantizer scale: BANK+POT_1 stepped over the default scale table
     const int32_t scale_index = pots_[Pot::SCALE]->GetMappedValue();
