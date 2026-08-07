@@ -240,6 +240,12 @@ void AppSummoner::Init()
         .initial_value = POT_MIN, // no resonance on power-up
     });
 
+    pots_[Pot::NOTE_ATTEN] = FancyPot::Create({
+        .pot = Hardware::Pot::POT_7,
+        .layer = Hardware::Layer::MODE,
+        .initial_value = POT_MAX, // full 1V/oct response by default
+    });
+
     for (auto &pot : pots_)
     {
         pot->Init(AUDIO_LOOP_RATE);
@@ -337,9 +343,11 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
 
 void AppSummoner::FireChord()
 {
-    // Root: FREE NOTE 1V/oct, sampled at fire time (stock convention for PITCH_2),
-    // transposed by the POT_1 offset (+-1 octave, center = no transpose)
-    const int32_t note_cv = Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PITCH_2);
+    // Root: NOTE input 1V/oct, sampled at fire time (stock convention for
+    // PITCH_2), scaled by the BANK+POT_7 CV amount (full = true 1V/oct, lower
+    // = smaller root jumps), transposed by the POT_1 offset (+-1 octave)
+    const int32_t note_cv = apply_pot_mod(Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PITCH_2),
+                                          pots_[Pot::NOTE_ATTEN]->GetValue());
     const float offset = static_cast<float>(pots_[Pot::PITCH_OFFSET]->GetValue() - pot(0.5f)) / static_cast<float>(pot(0.5f));
     float root = cv_to_freq_raw(kRootBase, note_cv);
     root *= std::pow(2.0f, offset * kPitchOffsetOctaves);

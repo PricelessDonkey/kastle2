@@ -109,6 +109,7 @@ private:
         DENSITY,      ///< BANK+POT_3: euclidean density 0 -> K (0 = sequencer silent)
         LENGTH,       ///< BANK+POT_4: euclidean cycle length K (stepped, 2-16)
         RESONANCE,    ///< BANK+POT_6: filter resonance
+        NOTE_ATTEN,   ///< BANK+POT_7: NOTE CV amount (attenuates PITCH_2 before 1V/oct)
         COUNT
     };
 
