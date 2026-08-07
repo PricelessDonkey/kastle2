@@ -110,10 +110,14 @@ void AppSummoner::Init()
 {
     inited_ = false;
 
-    // App owns ENV/CV/GATE outputs; Base keeps LFO, SYNC, clock and audio chain
+    // App owns ENV/CV/GATE outputs; Base keeps SYNC, clock and audio chain.
+    // LFO_OUT is app-owned too (added 2026-08-07): Base's LFO still runs, but
+    // the app writes the TRI jack itself, scaled by BANK+POT_7 — PULSE is
+    // passed through unchanged (LFO_OUT covers both jacks in Base)
     Kastle2::base.SetFeatureEnabled(Base::Feature::ENV_OUT, false);
     Kastle2::base.SetFeatureEnabled(Base::Feature::CV_OUT, false);
     Kastle2::base.SetFeatureEnabled(Base::Feature::GATE_OUT, false);
+    Kastle2::base.SetFeatureEnabled(Base::Feature::LFO_OUT, false);
 
     for (size_t v = 0; v < kNumVoices; v++)
     {
@@ -240,10 +244,11 @@ void AppSummoner::Init()
         .initial_value = POT_MIN, // no resonance on power-up
     });
 
-    pots_[Pot::NOTE_ATTEN] = FancyPot::Create({
+    pots_[Pot::LFO_AMOUNT] = FancyPot::Create({
         .pot = Hardware::Pot::POT_7,
         .layer = Hardware::Layer::MODE,
-        .initial_value = POT_MAX, // full 1V/oct response by default
+        .initial_value = POT_MAX, // full positive = stock TRI behavior
+        .deadzone = true,         // exact center = LFO off at the jack
     });
 
     for (auto &pot : pots_)
@@ -334,6 +339,17 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
         output[2 * i + 1] = sample;
     }
 
+    // LFO TRI jack, app-scaled (Base's LFO_OUT is disabled): amplitude grows
+    // from the 0V floor so low amounts stay useful as pitch CV — no constant
+    // offset at the midpoint. Negative amounts flip the triangle; PULSE is
+    // passed through exactly as Base would write it.
+    const int32_t tri = static_cast<int32_t>(Kastle2::base.GetLfoTriangle());
+    const int32_t tri_scaled = (lfo_amount_ >= 0)
+                                   ? (tri * lfo_amount_) / POT_HALF
+                                   : ((DAC_MAX - tri) * -lfo_amount_) / POT_HALF;
+    Kastle2::hw.SetTriOut(tri_scaled);
+    Kastle2::hw.SetPulseOut(Kastle2::base.GetLfo().GetSquareOut());
+
     for (auto &pot : pots_)
     {
         pot->Process();
@@ -344,10 +360,11 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
 void AppSummoner::FireChord()
 {
     // Root: NOTE input 1V/oct, sampled at fire time (stock convention for
-    // PITCH_2), scaled by the BANK+POT_7 CV amount (full = true 1V/oct, lower
-    // = smaller root jumps), transposed by the POT_1 offset (+-1 octave)
-    const int32_t note_cv = apply_pot_mod(Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PITCH_2),
-                                          pots_[Pot::NOTE_ATTEN]->GetValue());
+    // PITCH_2), transposed by the POT_1 offset (+-1 octave, center = no
+    // transpose). Jump intensity is tamed at the source instead: BANK+POT_7
+    // scales the LFO TRI jack (reverted 2026-08-07 from a NOTE-CV attenuator
+    // so external sequencers always track true 1V/oct)
+    const int32_t note_cv = Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PITCH_2);
     const float offset = static_cast<float>(pots_[Pot::PITCH_OFFSET]->GetValue() - pot(0.5f)) / static_cast<float>(pot(0.5f));
     float root = cv_to_freq_raw(kRootBase, note_cv);
     root *= std::pow(2.0f, offset * kPitchOffsetOctaves);
@@ -566,6 +583,10 @@ void AppSummoner::UiLoop()
     Kastle2::hw.SetCvOut(static_cast<int32_t>(root_octaves * static_cast<float>(DAC_1V) + 0.5f));
 
     volume_ = pot_to_q15(pots_[Pot::VOLUME]->GetValue());
+
+    // LFO TRI amplitude/polarity (BANK+POT_7): the deadzone plateau makes
+    // exact center a clean "LFO off at the jack"
+    lfo_amount_ = pots_[Pot::LFO_AMOUNT]->GetValue() - POT_HALF;
 
     // Filter: cutoff (SHIFT+POT_6) modulated by the summed voice envelope per
     // the bipolar env amount (BANK+POT_2, center off) — right of center chord

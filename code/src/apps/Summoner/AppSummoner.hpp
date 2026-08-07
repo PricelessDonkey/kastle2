@@ -109,7 +109,7 @@ private:
         DENSITY,      ///< BANK+POT_3: euclidean density 0 -> K (0 = sequencer silent)
         LENGTH,       ///< BANK+POT_4: euclidean cycle length K (stepped, 2-16)
         RESONANCE,    ///< BANK+POT_6: filter resonance
-        NOTE_ATTEN,   ///< BANK+POT_7: NOTE CV amount (attenuates PITCH_2 before 1V/oct)
+        LFO_AMOUNT,   ///< BANK+POT_7: LFO TRI jack amplitude/polarity (attenuverter, center = flat 0V)
         COUNT
     };
 
@@ -205,6 +205,11 @@ private:
     // Pots
     EnumArray<Pot, std::unique_ptr<FancyPot>> pots_;
     q15_t volume_ = 0;
+
+    /// Signed LFO TRI scale from BANK+POT_7 (pot - POT_HALF, so -2047..+2048):
+    /// positive = attenuated triangle, negative = inverted, 0 = flat 0V.
+    /// Computed in UiLoop, applied to the jack each AudioLoop pass.
+    int32_t lfo_amount_ = POT_HALF;
 
     /// Mix envelope for ENV_OUT: sum of the 4 voice envelopes / 4, captured
     /// per sample in AudioLoop (ExampleSynth pattern), written in UiLoop
