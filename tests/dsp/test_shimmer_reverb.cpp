@@ -127,6 +127,47 @@ TEST(ShimmerReverb_FullShimmerStaysBounded)
     ASSERT_TRUE(peak > 0.0); // it does sustain something
 }
 
+namespace
+{
+// Runs a steady noise-ish excitation and returns the total grain-wrap count —
+// a direct proxy for grain length (shorter grain → more wraps per second).
+uint32_t GrainWrapsAtShimmer(q15_t shimmer)
+{
+    ShimmerReverb rev;
+    rev.Init(kSampleRate);
+    rev.SetDecay(0.9f);
+    rev.SetInterval(ShimmerReverb::Interval::OCTAVE_UP);
+    rev.SetShimmer(shimmer);
+    for (int n = 0; n < 44000; ++n)
+    {
+        rev.Process((n % 200 == 0) ? (Q15_MAX / 2) : 0);
+    }
+    return rev.DebugGrainWraps();
+}
+} // namespace
+
+TEST(ShimmerReverb_GranularExtremeShrinksGrainAtTopOfRange)
+{
+    // At the top of the shimmer range the grain window shrinks, so the grains
+    // wrap far more often — the audible "chattering cloud" character. The same
+    // GRAIN_SIZE buffer is reused (kMinLen < kGrain, no reallocation).
+    static_assert(ShimmerReverb::kGrain > 700, "grain shrink must reuse the same buffer");
+
+    uint32_t wraps_full = GrainWrapsAtShimmer(q15(0.8f)); // baseline (extreme=0)
+    uint32_t wraps_top = GrainWrapsAtShimmer(Q15_MAX);    // shortest grain
+
+    ASSERT_TRUE(wraps_top > wraps_full * 2);
+}
+
+TEST(ShimmerReverb_BelowThresholdGrainIsUnchanged)
+{
+    // Below kExtremeStart (0.8) the extreme extension is inert: grain-wrap rate
+    // at 0.5 matches 0.8 exactly (both run the full-length fixed grain).
+    uint32_t wraps_mid = GrainWrapsAtShimmer(q15(0.5f));
+    uint32_t wraps_edge = GrainWrapsAtShimmer(q15(0.8f));
+    ASSERT_EQ(wraps_mid, wraps_edge);
+}
+
 TEST(ShimmerReverb_ResetSilencesTail)
 {
     // After Reset() the tail is gone: a fresh run produces the same first

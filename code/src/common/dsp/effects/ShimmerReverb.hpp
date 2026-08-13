@@ -92,6 +92,9 @@ public:
     /** @brief Set the shimmer pitch-shift interval. */
     void SetInterval(Interval interval);
 
+    /** @brief Diagnostic (tests): total granular grain wraps since Init/Reset. */
+    uint32_t DebugGrainWraps() const { return pitch_.wraps_; }
+
     // ---- Fixed buffer sizes (44kHz-tuned; total ~28KB) ----
     static constexpr std::size_t kPreDelayBuf = 1100;   ///< 25ms max pre-delay
     static constexpr std::size_t kPreDelayTap = 528;    ///< 12ms fixed pre-delay
@@ -182,34 +185,75 @@ private:
     /**
      * @brief Two-grain granular pitch shifter over a single ~60ms buffer.
      *
-     * Write pointer advances 1 sample/sample; a fixed-point grain phase (units
-     * of 1/kScale sample) advances by @ref step_ so the read delay drifts,
-     * yielding the pitch shift. Two grains offset by half the buffer crossfade
-     * with complementary triangular windows (unity sum, no click at wrap).
+     * Write pointer advances 1 sample/sample; each grain carries a fixed-point
+     * phase (units of 1/kScale sample) that advances by @ref step_ so its read
+     * delay drifts, yielding the pitch shift. The two grains are offset by half
+     * the (effective) grain window and crossfade with complementary triangular
+     * windows (unity sum, no click at wrap).
+     *
+     * Granular extremes (REVERB.md): @ref SetExtreme drives, with a single
+     * "extreme" amount, (a) the effective grain window shrinking from ~60ms
+     * toward ~16ms — the read modulus drops, the buffer is never reallocated —
+     * and (b) per-grain-wrap jitter on the read-start position and the pitch
+     * step. Extreme 0 = fixed full-length grain, no jitter (bit-identical to the
+     * plain shifter). Jitter uses a per-instance LCG, so no shared global RNG.
      */
     template <std::size_t N>
     struct PitchShifter
     {
         static constexpr int32_t kScale = 256;
-        static constexpr int32_t kRange = static_cast<int32_t>(N) * kScale;
+        static constexpr int32_t kFullLen = static_cast<int32_t>(N);
+        static constexpr int32_t kMinLen = 700;      ///< ~16ms shortest window
+        static constexpr int32_t kMaxPosJit = 220;   ///< ±5ms read-start jitter
+        static constexpr int32_t kMaxStepJit = 12;   ///< ±~5% pitch-ratio wobble
 
         q15least_t buf_[N] = {};
         std::size_t wpos_ = 0;
-        int32_t phase_ = 0;
-        int32_t step_ = 0; ///< (1 - pitch_ratio) in 1/kScale-sample units
+        int32_t base_step_ = 0; ///< (1 - pitch_ratio) in 1/kScale-sample units
 
-        q15_t ReadGrain(int32_t ph) const
+        int32_t glen_ = kFullLen; ///< effective grain length (samples)
+        int32_t range_ = kFullLen * kScale;
+        int32_t pos_jit_max_ = 0;
+        int32_t step_jit_max_ = 0;
+
+        int32_t phase_[2] = {0, 0};
+        int32_t pos_jit_[2] = {0, 0};
+        int32_t step_jit_[2] = {0, 0};
+        uint32_t rng_ = 0x2545F491u;
+        uint32_t wraps_ = 0; ///< diagnostic: total grain wraps (test hook)
+
+        int32_t NextRand(int32_t bound) // uniform in [-bound, bound]
         {
-            int32_t d = ph / kScale; // delay in samples, 0..N-1
+            if (bound <= 0)
+            {
+                return 0;
+            }
+            rng_ = rng_ * 1664525u + 1013904223u;
+            return static_cast<int32_t>((rng_ >> 8) % static_cast<uint32_t>(2 * bound + 1)) - bound;
+        }
+
+        q15_t ReadGrain(int i) const
+        {
+            int32_t d = phase_[i] / kScale + pos_jit_[i]; // jittered read delay
+            if (d < 0)
+            {
+                d = 0;
+            }
+            if (d >= kFullLen)
+            {
+                d = kFullLen - 1;
+            }
             std::size_t rp = (wpos_ + N - static_cast<std::size_t>(d)) % N;
             q15_t s = buf_[rp];
-            // Triangular window: peak at delay N/2, zero at the grain ends.
-            int32_t dist = d - static_cast<int32_t>(N / 2);
+            // Triangular window over [0, glen_): peak at glen_/2, zero at ends.
+            int32_t half = glen_ / 2;
+            int32_t gd = phase_[i] / kScale;
+            int32_t dist = gd - half;
             if (dist < 0)
             {
                 dist = -dist;
             }
-            q15_t win = Q15_MAX - static_cast<q15_t>((static_cast<int64_t>(dist) * Q15_MAX) / static_cast<int32_t>(N / 2));
+            q15_t win = Q15_MAX - static_cast<q15_t>((static_cast<int64_t>(dist) * Q15_MAX) / half);
             if (win < 0)
             {
                 win = 0;
@@ -217,26 +261,52 @@ private:
             return q15_mult(s, win);
         }
 
+        void Advance(int i)
+        {
+            phase_[i] += base_step_ + step_jit_[i];
+            bool wrapped = false;
+            while (phase_[i] >= range_)
+            {
+                phase_[i] -= range_;
+                wrapped = true;
+            }
+            while (phase_[i] < 0)
+            {
+                phase_[i] += range_;
+                wrapped = true;
+            }
+            if (wrapped)
+            {
+                ++wraps_;
+                pos_jit_[i] = NextRand(pos_jit_max_);
+                step_jit_[i] = NextRand(step_jit_max_);
+            }
+        }
+
         q15_t Process(q15_t x)
         {
             buf_[wpos_] = static_cast<q15least_t>(x);
-            int32_t ph2 = phase_ + kRange / 2;
-            if (ph2 >= kRange)
-            {
-                ph2 -= kRange;
-            }
-            q15_t y = q15_saturate(ReadGrain(phase_) + ReadGrain(ph2));
+            q15_t y = q15_saturate(ReadGrain(0) + ReadGrain(1));
             wpos_ = (wpos_ + 1) % N;
-            phase_ += step_;
-            while (phase_ >= kRange)
-            {
-                phase_ -= kRange;
-            }
-            while (phase_ < 0)
-            {
-                phase_ += kRange;
-            }
+            Advance(0);
+            Advance(1);
             return y;
+        }
+
+        // extreme: 0 = full ~60ms grain, no jitter; Q15_MAX = shortest + full jitter.
+        void SetExtreme(q15_t extreme)
+        {
+            glen_ = kFullLen - static_cast<int32_t>((static_cast<int64_t>(kFullLen - kMinLen) * extreme) / Q15_MAX);
+            range_ = glen_ * kScale;
+            pos_jit_max_ = static_cast<int32_t>((static_cast<int64_t>(kMaxPosJit) * extreme) / Q15_MAX);
+            step_jit_max_ = static_cast<int32_t>((static_cast<int64_t>(kMaxStepJit) * extreme) / Q15_MAX);
+            for (int i = 0; i < 2; ++i)
+            {
+                while (phase_[i] >= range_)
+                {
+                    phase_[i] -= range_;
+                }
+            }
         }
 
         void Clear()
@@ -246,7 +316,16 @@ private:
                 buf_[i] = 0;
             }
             wpos_ = 0;
-            phase_ = 0;
+            glen_ = kFullLen;
+            range_ = kFullLen * kScale;
+            pos_jit_max_ = 0;
+            step_jit_max_ = 0;
+            phase_[0] = 0;
+            phase_[1] = range_ / 2;
+            pos_jit_[0] = pos_jit_[1] = 0;
+            step_jit_[0] = step_jit_[1] = 0;
+            wraps_ = 0;
+            rng_ = 0x2545F491u;
         }
     };
 
@@ -288,6 +367,10 @@ private:
     static constexpr q15_t kTankDiffA = q15(0.7f);
     static constexpr q15_t kTankDiffB = q15(0.5f);
     static constexpr float kModRateHz = 0.5f;
+
+    // Granular extremes ramp in only across the top of the shimmer range:
+    // shimmer <= kExtremeStart is bit-identical to the plain shifter.
+    static constexpr q15_t kExtremeStart = q15(0.8f);
 };
 
 } // namespace kastle2

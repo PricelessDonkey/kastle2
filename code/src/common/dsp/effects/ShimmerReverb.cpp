@@ -64,7 +64,7 @@ void ShimmerReverb::Reset()
     damp_l_.Clear();
     damp_r_.Clear();
     pitch_.Clear();
-    pitch_.step_ = pitch_step_;
+    pitch_.base_step_ = pitch_step_;
 }
 
 void ShimmerReverb::SetDecay(float decay)
@@ -104,7 +104,7 @@ void ShimmerReverb::SetDamping(float damping)
 void ShimmerReverb::SetInterval(Interval interval)
 {
     pitch_step_ = IntervalStep(interval);
-    pitch_.step_ = pitch_step_;
+    pitch_.base_step_ = pitch_step_;
 }
 
 FASTCODE ShimmerReverb::Output ShimmerReverb::Process(q15_t input)
@@ -141,6 +141,11 @@ FASTCODE ShimmerReverb::Output ShimmerReverb::Process(q15_t input)
 
     // Shimmer: one mono pitch shifter on the summed feedback; blend the shifted
     // signal into each half's feedback by the shimmer amount.
+    // Granular extremes: ramp the grain shrink + jitter in across the top of
+    // the shimmer range (bit-identical below kExtremeStart).
+    q15_t extreme = shimmer_ > kExtremeStart ? q15_saturate((shimmer_ - kExtremeStart) * 5) : 0;
+    pitch_.SetExtreme(extreme);
+
     q15_t shimmer_in = (fb_l_raw + fb_r_raw) >> 1;
     q15_t shifted = pitch_.Process(shimmer_in);
     fb_l_ = q15_saturate(fb_l_raw + q15_mult(shimmer_, shifted - fb_l_raw));
