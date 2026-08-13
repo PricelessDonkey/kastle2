@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdlib>
 #include "common/core/Kastle2.hpp"
+#include "common/core/MultiCore.hpp"
 #include "common/dsp/synthesis/NoiseBlend.hpp"
 #include "common/utils.hpp"
 #include "SummonerTimbre.hpp"
@@ -33,6 +34,12 @@ constexpr float kPitchOffsetOctaves = 1.0f;
 constexpr auto kMapDecay = MapDef<float, 5>{
     {pot(0.0f), pot(0.25f), pot(0.5f), pot(0.75f), pot(1.0f)},
     {0.03f, 0.12f, 0.4f, 1.2f, 4.0f}};
+
+// Reverb decay (SHIFT+POT_5): short room to near-infinite tail. Top clamps to
+// ShimmerReverb::kMaxDecay (0.97) internally for loop stability.
+constexpr auto kMapReverbDecay = MapDef<float, 5>{
+    {pot(0.0f), pot(0.25f), pot(0.5f), pot(0.75f), pot(1.0f)},
+    {0.55f, 0.72f, 0.84f, 0.92f, 0.97f}};
 
 // Strum speed (SHIFT+POT_3, knob-only since the 2026-08-12 direction/speed
 // swap): frames between adjacent voices, 0 -> 300ms at 44kHz
@@ -147,6 +154,10 @@ void AppSummoner::Init()
     filter_.SetFrequency(SummonerTimbre::kMaxCutoffHz); // open until UiLoop takes over
     filter_.SetResonance(0.1f);
 
+    // ShimmerReverb runs on Core 1 with the clipper/filter (Phase 7). Init sets
+    // musical defaults (decay 0.85, shimmer 0, fifth-up); UiLoop drives them.
+    reverb_.Init(SAMPLE_RATE);
+
     strum_.Init(kStrumSeed);
     groove_.Init(kGrooveSeed);
     lfo_noise_.Seed(kLfoShapeSeed);
@@ -223,6 +234,19 @@ void AppSummoner::Init()
         .initial_value = POT_MAX, // filter open on power-up
     });
 
+    pots_[Pot::REVERB_DECAY] = FancyPot::Create({
+        .pot = Hardware::Pot::POT_5,
+        .layer = Hardware::Layer::SHIFT,
+        .initial_value = POT_HALF, // medium tail on power-up
+    });
+
+    pots_[Pot::INTERVAL] = FancyPot::Create({
+        .pot = Hardware::Pot::POT_2,
+        .layer = Hardware::Layer::SHIFT,
+        .initial_value = POT_MIN, // fifth-up is the second zone; see UiLoop map
+        .map_size = static_cast<uint32_t>(ShimmerReverb::Interval::COUNT),
+    });
+
     // Mode (BANK) layer
     pots_[Pot::SCALE] = FancyPot::Create({
         .pot = Hardware::Pot::POT_1,
@@ -255,6 +279,12 @@ void AppSummoner::Init()
         .pot = Hardware::Pot::POT_6,
         .layer = Hardware::Layer::MODE,
         .initial_value = POT_MIN, // no resonance on power-up
+    });
+
+    pots_[Pot::SHIMMER] = FancyPot::Create({
+        .pot = Hardware::Pot::POT_5,
+        .layer = Hardware::Layer::MODE,
+        .initial_value = POT_MIN, // clean plate on power-up
     });
 
     pots_[Pot::LFO_AMOUNT] = FancyPot::Create({
@@ -320,6 +350,13 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
 
     portamento_.TimeTick();
 
+    // Hand the block to Core 1 (WaveBard/FxWizard lock-step). Core 0 synthesises
+    // each dry mono sample into the output buffer, then requests Core 1 to run
+    // the effects chain (clipper → Svf → ShimmerReverb → volume) on it in place.
+    output_buffer_ = output;
+    buffer_size_ = size;
+    MultiCore::SendMessage(MultiCore::MessageType::BEGIN);
+
     for (size_t i = 0; i < size; i++)
     {
         // Groove counts frames for its step-period measurement; a true return
@@ -349,14 +386,16 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
 
         env_mix_ = static_cast<q15_t>(env_sum / static_cast<int32_t>(kNumVoices));
 
-        // Core 0 effects chain: mix -> SoftClipper (warmth) -> Svf LP -> volume
-        q15_t sample = static_cast<q15_t>(mix / static_cast<int32_t>(kNumVoices));
-        sample = filter_.Process(clipper_.Process(sample));
-        sample = q15_mult(sample, volume_);
-
+        // Write the dry mono mix; Core 1 reads it, applies the effects chain and
+        // overwrites both channels with the stereo wet mix once requested.
+        const q15_t sample = static_cast<q15_t>(mix / static_cast<int32_t>(kNumVoices));
         output[2 * i] = sample;
         output[2 * i + 1] = sample;
+        MultiCore::SendMessage(MultiCore::MessageType::SAMPLE_REQUEST, i);
     }
+
+    // Block the audio callback until Core 1 has processed every sample.
+    MultiCore::WaitForMessage(MultiCore::MessageType::DONE);
 
     // LFO TRI jack, app-scaled (Base's LFO_OUT is disabled): amplitude grows
     // from the 0V floor so low amounts stay useful as pitch CV — no constant
@@ -384,6 +423,52 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
         pot->Process();
     }
     fx_mode_.Process();
+}
+
+FASTCODE void AppSummoner::SecondCoreProcess(size_t index)
+{
+    // Core 0 wrote the dry mono mix to both channels; read one channel.
+    const q15_t dry = output_buffer_[2 * index];
+
+    // Effects chain: SoftClipper (warmth) → Svf LP → ShimmerReverb.
+    const q15_t voiced = filter_.Process(clipper_.Process(dry));
+
+    // The reverb produces the stereo tail; mix it over the (mono) dry so the
+    // chord stays present and the wet spreads the image. No wet/dry knob in the
+    // design — the reverb sits inline; decay/shimmer shape it (see plan note).
+    const ShimmerReverb::Output wet = reverb_.Process(voiced);
+    const q15_t left = q15_mult(q15_add(voiced, wet.left), volume_);
+    const q15_t right = q15_mult(q15_add(voiced, wet.right), volume_);
+
+    output_buffer_[2 * index] = left;
+    output_buffer_[2 * index + 1] = right;
+}
+
+FASTCODE void AppSummoner::SecondCoreWorker()
+{
+    while (inited_)
+    {
+        if (MultiCore::HasMessage())
+        {
+            MultiCore::Message m = MultiCore::GetMessage();
+            switch (m.type)
+            {
+            case MultiCore::MessageType::BEGIN:
+                second_core_processed_samples_ = 0;
+                break;
+            case MultiCore::MessageType::SAMPLE_REQUEST:
+                SecondCoreProcess(m.data);
+                second_core_processed_samples_++;
+                if (second_core_processed_samples_ == buffer_size_)
+                {
+                    MultiCore::SendMessage(MultiCore::MessageType::DONE);
+                }
+                break;
+            case MultiCore::MessageType::DONE:
+                break;
+            }
+        }
+    }
 }
 
 void AppSummoner::FireChord()
@@ -671,6 +756,15 @@ void AppSummoner::UiLoop()
     const float env_amount = SummonerTimbre::EnvAmountFromPot(pots_[Pot::FILTER_ENV]->GetValue());
     filter_.SetFrequency(SummonerTimbre::ModulatedCutoffHz(cutoff_base, env_amount, env_mix_));
     filter_.SetResonance(curve_map(pots_[Pot::RESONANCE]->GetValue(), kMapResonance, MapClamp::TRUE));
+
+    // ShimmerReverb (Core 1): decay SHIFT+POT_5, shimmer amount BANK+POT_5
+    // (top of range crosses into the granular-extreme cloud internally),
+    // interval SHIFT+POT_2 stepped over the 4 pitch zones. Set here at UiLoop
+    // rate while Core 1 is idle between blocks — no per-sample cross-core races.
+    reverb_.SetDecay(curve_map(pots_[Pot::REVERB_DECAY]->GetValue(), kMapReverbDecay, MapClamp::TRUE));
+    reverb_.SetShimmer(pot_to_q15(pots_[Pot::SHIMMER]->GetValue()));
+    const int32_t interval_zone = pots_[Pot::INTERVAL]->GetMappedValue();
+    reverb_.SetInterval(static_cast<ShimmerReverb::Interval>(interval_zone >= 0 ? interval_zone : 0));
 
     // Quantizer scale: BANK+POT_1 stepped over the default scale table
     const int32_t scale_index = pots_[Pot::SCALE]->GetMappedValue();

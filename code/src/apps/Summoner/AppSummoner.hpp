@@ -9,6 +9,7 @@
 #include "common/core/Kastle2.hpp"
 #include "common/controls/FancyMode.hpp"
 #include "common/controls/FancyPot.hpp"
+#include "common/dsp/effects/ShimmerReverb.hpp"
 #include "common/dsp/effects/SoftClipper.hpp"
 #include "common/dsp/filters/Svf.hpp"
 #include "common/dsp/math/qmath.hpp"
@@ -56,6 +57,13 @@ public:
      * @param size Number of sample pairs in the buffer (real size of the buffer is 2*size).
      */
     FASTCODE void AudioLoop(q15_t *input, q15_t *output, size_t size);
+
+    /**
+     * @brief Core 1 entry point — spins waiting for per-sample requests from
+     *        Core 0 and runs the effects chain (clipper → Svf → ShimmerReverb).
+     *        Registered via Kastle2::StartSecondCore in main.cpp.
+     */
+    FASTCODE void SecondCoreWorker();
 
     /**
      * @brief Called each time AudioLoop isn't busy.
@@ -112,6 +120,9 @@ private:
         LENGTH,       ///< BANK+POT_4: euclidean cycle length K (stepped, 2-16)
         RESONANCE,    ///< BANK+POT_6: filter resonance
         LFO_AMOUNT,   ///< BANK+POT_7: LFO TRI jack amplitude/polarity (attenuverter, center = flat 0V)
+        REVERB_DECAY, ///< SHIFT+POT_5: ShimmerReverb decay / tail length
+        SHIMMER,      ///< BANK+POT_5: shimmer amount (clean plate -> infinite shimmer, granular extreme at top)
+        INTERVAL,     ///< SHIFT+POT_2: shimmer pitch interval (octave-down / fifth / octave / two-octave)
         COUNT
     };
 
@@ -147,6 +158,14 @@ private:
     void ProcessComboLayer();
 
     /**
+     * @brief Core 1 per-sample effects: reads the dry mono sample Core 0 wrote
+     *        to the output buffer, runs clipper → Svf LP → ShimmerReverb, mixes
+     *        the stereo wet tail over the dry, applies volume, writes back.
+     * @param index Sample-pair index within the current block.
+     */
+    FASTCODE void SecondCoreProcess(size_t index);
+
+    /**
      * @brief Applies the SHIFT+BANK slot values to the voice engine (waveform,
      *        detune spread, humanize, attack).
      * @param force Apply everything regardless of change flags (Init / after
@@ -179,10 +198,17 @@ private:
     q15_t noise_dry_gain_ = Q15_MAX;
     q15_t noise_wet_gain_ = 0;
 
-    // Core 0 effects chain (Phase 6): mix -> SoftClipper -> Svf LP -> volume.
-    // Moves to Core 1 wholesale with the reverb in Phase 7.
+    // Effects chain — runs on Core 1 (Phase 7): mix (Core 0) -> SoftClipper ->
+    // Svf LP -> ShimmerReverb -> volume. Core 0 writes the dry mono mix to the
+    // output buffer; SecondCoreProcess reads it and overwrites with the wet mix.
     SoftClipper clipper_;
     Svf filter_;
+    ShimmerReverb reverb_;
+
+    // Core 0 <-> Core 1 lock-step (WaveBard/FxWizard SecondCoreWorker pattern).
+    q15_t *output_buffer_ = nullptr;             ///< Current block's output buffer (set by Core 0 each AudioLoop)
+    size_t buffer_size_ = 0;                     ///< Sample-pairs in the current block
+    size_t second_core_processed_samples_ = 0;   ///< Core 1's per-block progress counter
 
     // Chord-fire path
     EdgeDetector trigger_detect_ = EdgeDetector(EdgeDetector::Type::RISING);

@@ -18,6 +18,11 @@ static void process_audio(q15_t *input, q15_t *output, size_t size)
     app.AudioLoop(input, output, size);
 }
 
+static void second_core()
+{
+    app.SecondCoreWorker();
+}
+
 static void midi_callback(midi::Message *msg)
 {
     app.MidiCallback(msg);
@@ -34,6 +39,9 @@ int main()
 
     // Initialize the app
     app.Init();
+
+    // Start Core 1 (effects chain worker) before audio, per the WaveBard pattern
+    Kastle2::StartSecondCore(second_core);
 
     // Start I2S
     Kastle2::StartAudio(process_audio);
