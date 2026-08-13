@@ -20,6 +20,9 @@ constexpr float kMaxPitchHz = 8000.0f;
 // Strum seed — deterministic humanize jitter stream (any nonzero constant)
 constexpr uint32_t kStrumSeed = 0x50111011;
 
+// Groove seed — separate stream for the euclidean-hit skip rolls
+constexpr uint32_t kGrooveSeed = 0x6400FE11;
+
 // Pitch offset (POT_1) range: +-1 octave around center
 constexpr float kPitchOffsetOctaves = 1.0f;
 
@@ -142,6 +145,7 @@ void AppSummoner::Init()
     filter_.SetResonance(0.1f);
 
     strum_.Init(kStrumSeed);
+    groove_.Init(kGrooveSeed);
     voice_freq_.fill(kRootBase);
 
     euclid_.Init(); // power-on default: hits = length = 16, a chord on every tick
@@ -313,6 +317,12 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
 
     for (size_t i = 0; i < size; i++)
     {
+        // Groove counts frames for its step-period measurement; a true return
+        // is a swung euclidean hit maturing (fired via UiLoop like TRIG_IN)
+        if (groove_.Tick())
+        {
+            groove_fire_ = true;
+        }
         const uint32_t fired = strum_.Tick();
         int32_t mix = 0;
         int32_t env_sum = 0;
@@ -479,9 +489,10 @@ void AppSummoner::ApplyComboSlots(const bool force)
         noise_wet_gain_ = NoiseBlendGainWet(blend);
     }
 
-    // Strum humanize: applied at the next chord fire
-    humanize_ = static_cast<float>(combo_.GetValue(SlotIndex(ComboSlot::HUMANIZE))) /
-                static_cast<float>(POT_MAX);
+    // Groove: humanize (bottom zone) feeds the strum scheduler at the next
+    // chord fire; swing/skip read groove_q15_ in the euclidean-hit path
+    groove_q15_ = pot_to_q15(combo_.GetValue(SlotIndex(ComboSlot::GROOVE)));
+    humanize_ = SummonerGroove::HumanizeFromQ15(groove_q15_);
 
     // Attack time
     if (force || combo_.HasChanged(SlotIndex(ComboSlot::ATTACK)))
@@ -503,6 +514,7 @@ void AppSummoner::UiLoop()
     {
         euclid_.Reset();
         strum_.Reset();
+        groove_.Reset();
         voicing_snap_ = true;
         voicing_cv_at_snap_ = Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PARAM_1);
     }
@@ -515,15 +527,31 @@ void AppSummoner::UiLoop()
                             SummonerSequencer::DensityCvToPot(Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::FEED_3));
     euclid_.SetPattern(SummonerSequencer::DensityToHits(density, length), length);
 
-    // Clock ticks step the pattern and its hits fire chords; TRIG_IN fires
-    // additively on top via do_fire_
+    // Clock ticks step the pattern and its hits fire chords, gated/shifted by
+    // Groove's swing and skip zones; TRIG_IN fires additively on top via
+    // do_fire_ and never passes through Groove (density's normal-breaker scope)
     if (clock_tick_)
     {
         clock_tick_ = false;
+        groove_.OnClockTick();
         if (euclid_.Step())
         {
-            do_fire_ = true;
+            switch (groove_.ProcessHit(euclid_.GetStep(), groove_q15_))
+            {
+            case SummonerGroove::HitAction::FIRE:
+                do_fire_ = true;
+                break;
+            case SummonerGroove::HitAction::DEFERRED:
+            case SummonerGroove::HitAction::SKIPPED:
+                break;
+            }
         }
+    }
+
+    if (groove_fire_)
+    {
+        groove_fire_ = false;
+        do_fire_ = true;
     }
 
     if (do_fire_)

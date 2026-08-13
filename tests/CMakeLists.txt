@@ -56,6 +56,7 @@ set(TEST_SOURCES
     dsp/test_noise_blend.cpp
     dsp/test_euclidean_pattern.cpp
     dsp/test_combo_layer.cpp
+    dsp/test_summoner_groove.cpp
     dsp/test_summoner_chords.cpp
     dsp/test_summoner_sequencer.cpp
     dsp/test_summoner_strum.cpp

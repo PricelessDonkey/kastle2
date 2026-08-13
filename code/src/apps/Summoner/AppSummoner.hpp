@@ -21,6 +21,7 @@
 #include "SummonerChords.hpp"
 #include "SummonerComboLayer.hpp"
 #include "SummonerSequencer.hpp"
+#include "SummonerGroove.hpp"
 #include "SummonerStrum.hpp"
 #include "SummonerVoiceEnv.hpp"
 
@@ -121,7 +122,7 @@ private:
     {
         DETUNE,      ///< POT_1: voice detune / spread
         WAVEFORM,    ///< POT_2: voice waveform select (sine/tri/saw/square)
-        HUMANIZE,    ///< POT_3: strum timing jitter per chord fire
+        GROOVE,      ///< POT_3: humanize / swing / skip zones (expanded 2026-08-12)
         ATTACK,      ///< POT_4: envelope attack time
         FX_B_PARAM,  ///< POT_5: FX B parameter (stub until Phase 8)
         NOISE_BLEND, ///< POT_6: white-noise blend into the voices (equal-power)
@@ -164,6 +165,7 @@ private:
     std::array<OscillatorQ15, kNumVoices> oscs_;
     std::array<SummonerVoiceEnv, kNumVoices> envs_;
     SummonerStrum strum_;
+    SummonerGroove groove_;
     Quantizer quantizer_;
 
     /// Per-voice noise sources for the SHIFT+BANK+POT_6 blend — distinct seeds
@@ -185,6 +187,7 @@ private:
     EdgeDetector trigger_detect_ = EdgeDetector(EdgeDetector::Type::RISING);
     bool do_fire_ = false;
     bool clock_tick_ = false;
+    bool groove_fire_ = false; ///< A swung (deferred) euclidean hit matured in AudioLoop
     bool sustain_gate_ = false;
 
     // Euclidean sequencer (steps on Base clock ticks; hits fire chords)
@@ -219,7 +222,8 @@ private:
     SummonerComboLayer combo_;
     int32_t waveform_zone_ = -1;                       ///< Cached waveform zone (-1 = not applied yet)
     std::array<float, kNumVoices> detune_mult_ = {1.0f, 1.0f, 1.0f, 1.0f}; ///< Per-voice detune multipliers (root stays true)
-    float humanize_ = 0.0f;                            ///< Strum jitter amount 0..1
+    float humanize_ = 0.0f;                            ///< Strum jitter amount 0..1 (Groove bottom zone)
+    q15_t groove_q15_ = 0;                             ///< Groove control value (SHIFT+BANK+POT_3)
 
     /**
      * @brief FX B slot states (Phase 8 wires the actual effects), cycled by a
