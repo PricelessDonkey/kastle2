@@ -82,7 +82,7 @@ private:
     // EEPROM addresses for the stepped selectors (persist across power cycles;
     // the 0x11 app ID keeps them app-specific)
     static constexpr size_t kMemScale = Memory::ADDR_APP_SPACE + 0x0;    ///< Quantizer scale (BANK+POT_1)
-    static constexpr size_t kMemStrumDir = Memory::ADDR_APP_SPACE + 0x1; ///< Strum direction (SHIFT+POT_3)
+    static constexpr size_t kMemStrumDir = Memory::ADDR_APP_SPACE + 0x1; ///< Strum direction (POT_3 primary since 2026-08-12)
     static constexpr size_t kMemFxMode = Memory::ADDR_APP_SPACE + 0x2;   ///< FX B selection (BANK press cycle)
     static constexpr size_t kMemWaveform = Memory::ADDR_APP_SPACE + 0x3; ///< Waveform slot value (SHIFT+BANK+POT_2)
 
@@ -98,10 +98,10 @@ private:
         PITCH_OFFSET, ///< POT_1 primary: chord root transpose (+-1 octave)
         DECAY,        ///< POT_4 primary: decay / note length
         VOICING,      ///< POT_2 primary: voicing sweep close -> open -> extended
-        STRUM_SPEED,  ///< POT_3 primary: strum, 0 = block chord, max = slow arpeggio
+        STRUM_DIR,    ///< POT_3 primary: strum direction, 6 zones + PARAM_2 CV (swapped with speed 2026-08-12)
         QUALITY,      ///< POT_6 primary: chord quality zones (major ... dim)
         PORTAMENTO,   ///< SHIFT+POT_1: portamento time on the chord root
-        STRUM_DIR,    ///< SHIFT+POT_3: strum direction (3-way stepped)
+        STRUM_SPEED,  ///< SHIFT+POT_3: strum speed, 0 = block chord, max = slow arpeggio (knob-only)
         LENGTH_ATTEN, ///< SHIFT+POT_4: LENGTH MOD CV attenuation
         CUTOFF,       ///< SHIFT+POT_6: filter cutoff
         SCALE,        ///< BANK+POT_1: quantizer scale select

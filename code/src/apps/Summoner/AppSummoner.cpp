@@ -28,11 +28,16 @@ constexpr auto kMapDecay = MapDef<float, 5>{
     {pot(0.0f), pot(0.25f), pot(0.5f), pot(0.75f), pot(1.0f)},
     {0.03f, 0.12f, 0.4f, 1.2f, 4.0f}};
 
-// Strum speed (POT_3): frames between adjacent voices, 0 -> 300ms at 44kHz
+// Strum speed (SHIFT+POT_3, knob-only since the 2026-08-12 direction/speed
+// swap): frames between adjacent voices, 0 -> 300ms at 44kHz
 // (per the CHORD-GEN.md strum table: 0 / ~8ms / ~30ms / ~80ms / ~300ms)
 constexpr auto kMapStrum = MapDef<int32_t, 5>{
     {pot(0.0f), pot(0.25f), pot(0.5f), pot(0.75f), pot(1.0f)},
     {0, 352, 1320, 3520, SummonerStrum::kMaxStrumFrames}};
+
+// Strum direction (POT_3 + PARAM_2 CV) power-on/memory default: middle of the
+// Up zone — clean of the 0-3% broken-chord fray at the hard stop
+constexpr int32_t kDirDefaultValue = pot(0.08f);
 
 // A BANK press only cycles FX B when released within this time (and with no
 // knob turn) — same gesture timing as the stock apps' bank/mode buttons
@@ -171,10 +176,11 @@ void AppSummoner::Init()
         .initial_value = POT_MIN, // close voicing on power-up
     });
 
-    pots_[Pot::STRUM_SPEED] = FancyPot::Create({
+    pots_[Pot::STRUM_DIR] = FancyPot::Create({
         .pot = Hardware::Pot::POT_3,
         .layer = Hardware::Layer::NORMAL,
-        .initial_value = POT_MIN, // block chords on power-up
+        .initial_value = kDirDefaultValue, // Up zone (memory overrides if set)
+        .memory_addr = kMemStrumDir,
     });
 
     pots_[Pot::QUALITY] = FancyPot::Create({
@@ -190,12 +196,10 @@ void AppSummoner::Init()
         .initial_value = POT_MIN, // no glide until Phase 4 wires it
     });
 
-    pots_[Pot::STRUM_DIR] = FancyPot::Create({
+    pots_[Pot::STRUM_SPEED] = FancyPot::Create({
         .pot = Hardware::Pot::POT_3,
         .layer = Hardware::Layer::SHIFT,
-        .initial_value = POT_MIN, // low -> high default
-        .map_size = static_cast<size_t>(SummonerStrum::Direction::COUNT),
-        .memory_addr = kMemStrumDir,
+        .initial_value = POT_MIN, // block chords on power-up
     });
 
     pots_[Pot::LENGTH_ATTEN] = FancyPot::Create({
@@ -282,7 +286,7 @@ void AppSummoner::DeInit()
 void AppSummoner::MemoryInitialization()
 {
     Kastle2::memory.Write8(kMemScale, pot_to_mem(POT_HALF));   // chromatic
-    Kastle2::memory.Write8(kMemStrumDir, pot_to_mem(POT_MIN)); // low -> high
+    Kastle2::memory.Write8(kMemStrumDir, pot_to_mem(kDirDefaultValue)); // Up zone
     Kastle2::memory.Write8(kMemFxMode, std::to_underlying(FxB::OFF));
     Kastle2::memory.Write8(kMemWaveform, pot_to_mem(kWaveformDefaultSlotValue)); // saw
 }
@@ -388,16 +392,14 @@ void AppSummoner::FireChord()
 
     SummonerChords::ComputeChord(root, quality, voicing, quantizer_, voice_freq_);
 
-    // Strum: speed from POT_3 summed with LFO MOD CV (PARAM_2), direction from SHIFT+POT_3
-    const int32_t strum_val = pots_[Pot::STRUM_SPEED]->GetValue() +
-                              Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PARAM_2);
-    const int32_t strum_frames = curve_map(strum_val, kMapStrum, MapClamp::TRUE);
-    int32_t dir_index = pots_[Pot::STRUM_DIR]->GetMappedValue();
-    if (dir_index < 0)
-    {
-        dir_index = 0;
-    }
-    strum_.Fire(strum_frames, static_cast<SummonerStrum::Direction>(dir_index), humanize_);
+    // Strum: direction from POT_3 summed with LFO MOD CV (PARAM_2) — 6 zones,
+    // with the broken-chord skip fraying in at the range's two hard ends;
+    // speed from SHIFT+POT_3, knob-only (2026-08-12 swap)
+    const int32_t strum_frames = curve_map(pots_[Pot::STRUM_SPEED]->GetValue(), kMapStrum, MapClamp::TRUE);
+    const q15_t dir_val = pot_to_q15(pots_[Pot::STRUM_DIR]->GetValue() +
+                                     Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PARAM_2));
+    strum_.Fire(strum_frames, SummonerStrum::DirectionFromQ15(dir_val), humanize_,
+                SummonerStrum::SkipChanceFromQ15(dir_val));
 }
 
 void AppSummoner::ProcessComboLayer()
