@@ -22,6 +22,7 @@
 #include "SummonerComboLayer.hpp"
 #include "SummonerSequencer.hpp"
 #include "SummonerGroove.hpp"
+#include "SummonerLfoShape.hpp"
 #include "SummonerStrum.hpp"
 #include "SummonerVoiceEnv.hpp"
 
@@ -213,6 +214,15 @@ private:
     /// positive = attenuated triangle, negative = inverted, 0 = flat 0V.
     /// Computed in UiLoop, applied to the jack each AudioLoop pass.
     int32_t lfo_amount_ = POT_HALF;
+
+    /// LFO triangle reshaper for POT_7's outer 20% zones (wander / sample &
+    /// hold). Rate pinning is applied to Base's LFO in UiLoop; the shape is
+    /// applied to the TRI jack value each AudioLoop pass. See CHORD-GEN.md
+    /// "LFO Shape Extremes".
+    SummonerLfoShape lfo_shape_;
+    bool lfo_last_sample_prev_ = false; ///< Edge-detects the LFO phase wrap (once-per-cycle redraw)
+    int32_t lfo_rate_pot_ = POT_HALF;   ///< POT_7 NORMAL value, cached in UiLoop for the AudioLoop reshape
+    WhiteNoise lfo_noise_;              ///< Dedicated random source for the wander/S&H redraws
 
     /// Mix envelope for ENV_OUT: sum of the 4 voice envelopes / 4, captured
     /// per sample in AudioLoop (ExampleSynth pattern), written in UiLoop

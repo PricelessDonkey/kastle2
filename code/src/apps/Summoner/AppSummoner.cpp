@@ -23,6 +23,9 @@ constexpr uint32_t kStrumSeed = 0x50111011;
 // Groove seed — separate stream for the euclidean-hit skip rolls
 constexpr uint32_t kGrooveSeed = 0x6400FE11;
 
+// LFO shape seed — wander / sample-&-hold redraws at POT_7's extremes
+constexpr uint32_t kLfoShapeSeed = 0x1F0BEA71;
+
 // Pitch offset (POT_1) range: +-1 octave around center
 constexpr float kPitchOffsetOctaves = 1.0f;
 
@@ -146,6 +149,8 @@ void AppSummoner::Init()
 
     strum_.Init(kStrumSeed);
     groove_.Init(kGrooveSeed);
+    lfo_noise_.Seed(kLfoShapeSeed);
+    lfo_shape_.Reset();
     voice_freq_.fill(kRootBase);
 
     euclid_.Init(); // power-on default: hits = length = 16, a chord on every tick
@@ -356,8 +361,18 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
     // LFO TRI jack, app-scaled (Base's LFO_OUT is disabled): amplitude grows
     // from the 0V floor so low amounts stay useful as pitch CV — no constant
     // offset at the midpoint. Negative amounts flip the triangle; PULSE is
-    // passed through exactly as Base would write it.
-    const int32_t tri = static_cast<int32_t>(Kastle2::base.GetLfoTriangle());
+    // passed through exactly as Base would write it (always the clean square).
+    //
+    // Before scaling, POT_7's outer 20% zones reshape the triangle into
+    // wander / sample-&-hold (redrawn once per LFO cycle at the phase wrap).
+    // IsLastSample() is true on the buffer before the wrap; its rising edge
+    // marks the redraw point.
+    const bool lfo_last = Kastle2::base.GetLfo().IsLastSample();
+    const bool lfo_wrapped = lfo_last && !lfo_last_sample_prev_;
+    lfo_last_sample_prev_ = lfo_last;
+    const int32_t tri = lfo_shape_.Process(
+        static_cast<int32_t>(Kastle2::base.GetLfoTriangle()),
+        lfo_wrapped, lfo_rate_pot_, lfo_noise_);
     const int32_t tri_scaled = (lfo_amount_ >= 0)
                                    ? (tri * lfo_amount_) / POT_HALF
                                    : ((DAC_MAX - tri) * -lfo_amount_) / POT_HALF;
@@ -617,6 +632,37 @@ void AppSummoner::UiLoop()
     // LFO TRI amplitude/polarity (BANK+POT_7): the deadzone plateau makes
     // exact center a clean "LFO off at the jack"
     lfo_amount_ = pots_[Pot::LFO_AMOUNT]->GetValue() - POT_HALF;
+
+    // LFO shape extremes: cache POT_7's rate-knob position for the AudioLoop
+    // reshape, and while in an outer 20% zone pin the LFO rate at that zone's
+    // boundary — turning further morphs the wave (wander / sample & hold)
+    // instead of changing speed. Base's BeforeUiLoop already set the rate from
+    // the true pot; we re-apply the clamped boundary value on top, mirroring
+    // Base's own rate maps. (LFO MOD CV on rate is intentionally frozen in the
+    // zones too — the "rate" concept is fixed there.) Skipped while the combo
+    // layer owns the pots.
+    if (!combo_.IsActive())
+    {
+        Kastle2::hw.ReadPot(&lfo_rate_pot_, Hardware::Pot::POT_7, Hardware::Layer::NORMAL);
+        if (SummonerLfoShape::InExtremeZone(lfo_rate_pot_))
+        {
+            const int32_t pinned = SummonerLfoShape::EffectiveRatePot(lfo_rate_pot_);
+            Lfo &lfo = Kastle2::base.GetLfo();
+            if (pinned <= POT_HALF)
+            {
+                // Synced side (0–20%): pin to the boundary's clock ratio.
+                const int32_t idx = constrain(curve_map(pinned, kBaseLfoRatioMap), 0,
+                                              static_cast<int32_t>(kBaseLfoRatios.size()) - 1);
+                lfo.SetClockTicks(Kastle2::base.GetClock().GetTargetTicks());
+                lfo.SetRatio(kBaseLfoRatios[idx]);
+            }
+            else
+            {
+                // Free side (80–100%): pin to the boundary's frequency.
+                lfo.SetFrequency(curve_map(pinned, kBaseLfoMap));
+            }
+        }
+    }
 
     // Filter: cutoff (SHIFT+POT_6) modulated by the summed voice envelope per
     // the bipolar env amount (BANK+POT_2, center off) — right of center chord
