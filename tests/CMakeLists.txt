@@ -42,6 +42,7 @@ set(DSP_SOURCES
     ${FIRMWARE_SRC}/common/dsp/control/AdsrEnv.cpp
     ${FIRMWARE_SRC}/common/dsp/utility/Quantizer.cpp
     ${FIRMWARE_SRC}/common/dsp/effects/SoftClipper.cpp
+    ${FIRMWARE_SRC}/common/dsp/effects/ShimmerReverb.cpp
     ${FIRMWARE_SRC}/common/dsp/synthesis/Oscillator.cpp
     ${FIRMWARE_SRC}/common/dsp/synthesis/OscillatorQ15.cpp
     ${FIRMWARE_SRC}/common/dsp/filters/Svf.cpp
@@ -52,6 +53,7 @@ set(TEST_SOURCES
     dsp/test_allpass_precision.cpp
     dsp/test_quantizer.cpp
     dsp/test_soft_clipper.cpp
+    dsp/test_shimmer_reverb.cpp
     dsp/test_slewer.cpp
     dsp/test_oscillator.cpp
     dsp/test_noise_blend.cpp
