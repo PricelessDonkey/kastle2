@@ -24,6 +24,7 @@
 #include "SummonerSequencer.hpp"
 #include "SummonerGroove.hpp"
 #include "SummonerLfoShape.hpp"
+#include "SummonerReverbBlend.hpp"
 #include "SummonerStrum.hpp"
 #include "SummonerVoiceEnv.hpp"
 
@@ -120,7 +121,7 @@ private:
         LENGTH,       ///< BANK+POT_4: euclidean cycle length K (stepped, 2-16)
         RESONANCE,    ///< BANK+POT_6: filter resonance
         LFO_AMOUNT,   ///< BANK+POT_7: LFO TRI jack amplitude/polarity (attenuverter, center = flat 0V)
-        REVERB_DECAY, ///< SHIFT+POT_5: ShimmerReverb decay / tail length
+        REVERB_BLEND, ///< SHIFT+POT_5: reverb combo — dry->wet then decay short->long (SummonerReverbBlend)
         SHIMMER,      ///< BANK+POT_5: shimmer amount (clean plate -> infinite shimmer, granular extreme at top)
         INTERVAL,     ///< SHIFT+POT_2: shimmer pitch interval (octave-down / fifth / octave / two-octave)
         COUNT
@@ -204,6 +205,10 @@ private:
     SoftClipper clipper_;
     Svf filter_;
     ShimmerReverb reverb_;
+
+    /// Reverb dry↔wet crossfade from SHIFT+POT_5 (0 = dry, Q15_MAX = wet), set at
+    /// UiLoop rate, read per-sample on Core 1 (see SummonerReverbBlend).
+    q15_t reverb_wet_ = 0;
 
     // Core 0 <-> Core 1 lock-step (WaveBard/FxWizard SecondCoreWorker pattern).
     q15_t *output_buffer_ = nullptr;             ///< Current block's output buffer (set by Core 0 each AudioLoop)

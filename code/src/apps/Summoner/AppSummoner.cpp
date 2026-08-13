@@ -35,12 +35,6 @@ constexpr auto kMapDecay = MapDef<float, 5>{
     {pot(0.0f), pot(0.25f), pot(0.5f), pot(0.75f), pot(1.0f)},
     {0.03f, 0.12f, 0.4f, 1.2f, 4.0f}};
 
-// Reverb decay (SHIFT+POT_5): short room to near-infinite tail. Top clamps to
-// ShimmerReverb::kMaxDecay (0.97) internally for loop stability.
-constexpr auto kMapReverbDecay = MapDef<float, 5>{
-    {pot(0.0f), pot(0.25f), pot(0.5f), pot(0.75f), pot(1.0f)},
-    {0.55f, 0.72f, 0.84f, 0.92f, 0.97f}};
-
 // Strum speed (SHIFT+POT_3, knob-only since the 2026-08-12 direction/speed
 // swap): frames between adjacent voices, 0 -> 300ms at 44kHz
 // (per the CHORD-GEN.md strum table: 0 / ~8ms / ~30ms / ~80ms / ~300ms)
@@ -136,6 +130,15 @@ void AppSummoner::Init()
     Kastle2::base.SetFeatureEnabled(Base::Feature::CV_OUT, false);
     Kastle2::base.SetFeatureEnabled(Base::Feature::GATE_OUT, false);
     Kastle2::base.SetFeatureEnabled(Base::Feature::LFO_OUT, false);
+
+    // Base's stock INPUT_GAIN (SHIFT+POT_1) and OUTPUT_GAIN (SHIFT+POT_5) read
+    // the same physical pots this app repurposes (portamento on SHIFT+POT_1,
+    // reverb blend on SHIFT+POT_5). Left enabled, OUTPUT_GAIN silently scales
+    // the whole output buffer to 0 when the reverb knob is low — indistinguish-
+    // able from "the volume died". The app owns its own volume (POT_5 NORMAL),
+    // so disable both stock gain features and free the SHIFT layer for the app.
+    Kastle2::base.SetFeatureEnabled(Base::Feature::INPUT_GAIN, false);
+    Kastle2::base.SetFeatureEnabled(Base::Feature::OUTPUT_GAIN, false);
 
     for (size_t v = 0; v < kNumVoices; v++)
     {
@@ -234,10 +237,10 @@ void AppSummoner::Init()
         .initial_value = POT_MAX, // filter open on power-up
     });
 
-    pots_[Pot::REVERB_DECAY] = FancyPot::Create({
+    pots_[Pot::REVERB_BLEND] = FancyPot::Create({
         .pot = Hardware::Pot::POT_5,
         .layer = Hardware::Layer::SHIFT,
-        .initial_value = POT_HALF, // medium tail on power-up
+        .initial_value = POT_MIN, // fully dry on power-up (dry chord, no reverb)
     });
 
     pots_[Pot::INTERVAL] = FancyPot::Create({
@@ -433,12 +436,14 @@ FASTCODE void AppSummoner::SecondCoreProcess(size_t index)
     // Effects chain: SoftClipper (warmth) → Svf LP → ShimmerReverb.
     const q15_t voiced = filter_.Process(clipper_.Process(dry));
 
-    // The reverb produces the stereo tail; mix it over the (mono) dry so the
-    // chord stays present and the wet spreads the image. No wet/dry knob in the
-    // design — the reverb sits inline; decay/shimmer shape it (see plan note).
+    // Dry↔wet crossfade from SHIFT+POT_5 (reverb_wet_): at 0 the reverb is fully
+    // bypassed (pure dry chord — a clean dry signal is always reachable), at
+    // Q15_MAX it's the stereo wet tail only. Keep feeding the reverb every sample
+    // regardless so the tail is continuous as the mix opens.
     const ShimmerReverb::Output wet = reverb_.Process(voiced);
-    const q15_t left = q15_mult(q15_add(voiced, wet.left), volume_);
-    const q15_t right = q15_mult(q15_add(voiced, wet.right), volume_);
+    const q15_t dry_gain = static_cast<q15_t>(Q15_MAX - reverb_wet_);
+    const q15_t left = q15_mult(q15_add(q15_mult(voiced, dry_gain), q15_mult(wet.left, reverb_wet_)), volume_);
+    const q15_t right = q15_mult(q15_add(q15_mult(voiced, dry_gain), q15_mult(wet.right, reverb_wet_)), volume_);
 
     output_buffer_[2 * index] = left;
     output_buffer_[2 * index + 1] = right;
@@ -757,11 +762,15 @@ void AppSummoner::UiLoop()
     filter_.SetFrequency(SummonerTimbre::ModulatedCutoffHz(cutoff_base, env_amount, env_mix_));
     filter_.SetResonance(curve_map(pots_[Pot::RESONANCE]->GetValue(), kMapResonance, MapClamp::TRUE));
 
-    // ShimmerReverb (Core 1): decay SHIFT+POT_5, shimmer amount BANK+POT_5
-    // (top of range crosses into the granular-extreme cloud internally),
-    // interval SHIFT+POT_2 stepped over the 4 pitch zones. Set here at UiLoop
-    // rate while Core 1 is idle between blocks — no per-sample cross-core races.
-    reverb_.SetDecay(curve_map(pots_[Pot::REVERB_DECAY]->GetValue(), kMapReverbDecay, MapClamp::TRUE));
+    // ShimmerReverb (Core 1): SHIFT+POT_5 is the dry↔wet + decay combo knob
+    // (SummonerReverbBlend — 0 = fully dry, 50% = short/very-wet, 100% = long/
+    // very-wet); shimmer amount BANK+POT_5 (top crosses into the granular-extreme
+    // cloud internally); interval SHIFT+POT_2 stepped over the 4 pitch zones. Set
+    // here at UiLoop rate while Core 1 is idle between blocks — no cross-core race.
+    const SummonerReverbBlend::Result blend =
+        SummonerReverbBlend::Compute(pot_to_q15(pots_[Pot::REVERB_BLEND]->GetValue()));
+    reverb_.SetDecay(blend.decay);
+    reverb_wet_ = blend.wet;
     reverb_.SetShimmer(pot_to_q15(pots_[Pot::SHIMMER]->GetValue()));
     const int32_t interval_zone = pots_[Pot::INTERVAL]->GetMappedValue();
     reverb_.SetInterval(static_cast<ShimmerReverb::Interval>(interval_zone >= 0 ? interval_zone : 0));
