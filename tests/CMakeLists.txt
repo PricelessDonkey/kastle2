@@ -49,6 +49,7 @@ set(DSP_SOURCES
 
 set(TEST_SOURCES
     dsp/test_adsr_env.cpp
+    dsp/test_allpass_precision.cpp
     dsp/test_quantizer.cpp
     dsp/test_soft_clipper.cpp
     dsp/test_slewer.cpp
