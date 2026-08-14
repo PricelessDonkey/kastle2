@@ -9,8 +9,10 @@
 #include "common/core/Kastle2.hpp"
 #include "common/controls/FancyMode.hpp"
 #include "common/controls/FancyPot.hpp"
+#include "common/dsp/effects/BitCrusher.hpp"
 #include "common/dsp/effects/ShimmerReverb.hpp"
 #include "common/dsp/effects/SoftClipper.hpp"
+#include "common/dsp/effects/StereoDelay.hpp"
 #include "common/dsp/filters/Svf.hpp"
 #include "common/dsp/math/qmath.hpp"
 #include "common/dsp/synthesis/OscillatorQ15.hpp"
@@ -209,6 +211,16 @@ private:
     /// Reverb dry↔wet crossfade from SHIFT+POT_5 (0 = dry, Q15_MAX = wet), set at
     /// UiLoop rate, read per-sample on Core 1 (see SummonerReverbBlend).
     q15_t reverb_wet_ = 0;
+
+    // FX B slot (Phase 8): optional pre-reverb effect on Core 1, cycled by BANK
+    // press. StereoDelay capped at kFxDelayMax samples (~500ms/ch, 88KB) so it
+    // fits alongside the ~27KB reverb — never the 206KB default. The reverb is
+    // independent and stays live in every FX B state, so Delay+reverb runs both
+    // (echoes feed the shimmer tail). Param SHIFT+BANK+POT_5, mix SHIFT+BANK+POT_7.
+    static constexpr size_t kFxDelayMax = 22000; ///< ~500ms/channel at 44kHz
+    StereoDelay fx_delay_ = StereoDelay(kFxDelayMax);
+    BitCrusher fx_crusher_;
+    q15_t fx_mix_ = 0; ///< FX B wet/dry crossfade (SHIFT+BANK+POT_7), UiLoop → Core 1
 
     // Core 0 <-> Core 1 lock-step (WaveBard/FxWizard SecondCoreWorker pattern).
     q15_t *output_buffer_ = nullptr;             ///< Current block's output buffer (set by Core 0 each AudioLoop)

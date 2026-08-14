@@ -152,6 +152,7 @@ SET(KASTLE2_COMMON_SOURCES
     ${SRC}/common/dsp/utility/Sequencer.cpp
     ${SRC}/common/dsp/utility/Portamento.cpp
     ${SRC}/common/dsp/utility/KastleRungler.cpp
+    ${SRC}/common/dsp/effects/BitCrusher.cpp
     ${SRC}/common/dsp/effects/HardClipper.cpp
     ${SRC}/common/dsp/effects/SoftClipper.cpp
     ${SRC}/common/dsp/effects/StereoDelay.cpp

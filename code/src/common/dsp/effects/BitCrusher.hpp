@@ -77,32 +77,7 @@ public:
      * @param sample Nice and clean sample
      * @return Crushed sample
      */
-    FASTCODE q15_t Process(q15_t sample)
-    {
-        counter_ += sample_rate_;
-        if (counter_ >= Q15_MAX)
-        {
-            counter_ -= Q15_MAX;
-
-            int32_t shift_up = shift_;
-
-            // Loudness compensation, so it doesn't blow up the volume too much when in lowest bit depths
-            if (shift_ > 12)
-            {
-                shift_up -= 1;
-            }
-            if (shift_ > 13)
-            {
-                shift_up -= 1;
-            }
-
-            last_sample_ = next_sample_;
-            next_sample_ = (sample >> shift_) << shift_up;
-        }
-
-        // Linear interpolation between last_sample_ and next_sample_
-        return q15_add(last_sample_, q15_mult((next_sample_ - last_sample_), counter_));
-    }
+    FASTCODE q15_t Process(q15_t sample);
 
     static constexpr uint32_t kMinBitDepth = 1;
     static constexpr uint32_t kMaxBitDepth = 16;

@@ -105,6 +105,26 @@ constexpr std::array<uint32_t, 4> kNoiseSeeds = {
     0x600D5EED + 3 * 0x9E3779B9,
 };
 
+// FX B delay time (SHIFT+BANK+POT_5 in DELAY / BOTH): ~11ms → ~500ms. The right
+// channel runs shorter for a stereo spread that survives into the dry path.
+constexpr auto kMapFxDelay = MapDef<int32_t, 3>{
+    {pot(0.0f), pot(0.5f), pot(1.0f)},
+    {500, 8000, 22000}};
+
+// FX B crush sample rate (CRUSH): knob up = more crush (heavier downsampling),
+// clean at the bottom down to BitCrusher's ~688Hz floor at the top.
+constexpr auto kMapFxCrushRate = MapDef<int32_t, 3>{
+    {pot(0.0f), pot(0.5f), pot(1.0f)},
+    {BitCrusher::kMaxSampleRate, Q15_MAX / 8, BitCrusher::kMinSampleRate}};
+
+// FX B crush bit depth (CRUSH): 12 bits (subtle) → 4 bits (gritty), same knob.
+constexpr auto kMapFxCrushBits = MapDef<int32_t, 3>{
+    {pot(0.0f), pot(0.5f), pot(1.0f)},
+    {12, 8, 4}};
+
+// FX B delay feedback — fixed; a few repeats without runaway self-oscillation.
+constexpr q15_t kFxDelayFeedback = q15(0.4f);
+
 // SHIFT+BANK fourth-layer slot -> physical pot (index = ComboSlot)
 constexpr std::array<Hardware::Pot, SummonerComboLayer::kNumSlots> kComboSlotPots = {
     Hardware::Pot::POT_1,
@@ -160,6 +180,16 @@ void AppSummoner::Init()
     // ShimmerReverb runs on Core 1 with the clipper/filter (Phase 7). Init sets
     // musical defaults (decay 0.85, shimmer 0, fifth-up); UiLoop drives them.
     reverb_.Init(SAMPLE_RATE);
+
+    // FX B (Phase 8): heap-allocated delay line (capped at kFxDelayMax) + a
+    // header-only crusher, both sit pre-reverb on Core 1. The delay runs fully
+    // wet — the FX B mix knob crossfades dry↔effected externally so one knob
+    // serves DELAY / CRUSH / BOTH uniformly. Crush defaults are moderate (used
+    // as-is in BOTH, where the param knob drives the delay time instead).
+    fx_delay_.Init(SAMPLE_RATE);
+    fx_delay_.SetWet(Q15_MAX);
+    fx_delay_.SetFeedback(kFxDelayFeedback);
+    fx_crusher_.Init();
 
     strum_.Init(kStrumSeed);
     groove_.Init(kGrooveSeed);
@@ -433,17 +463,45 @@ FASTCODE void AppSummoner::SecondCoreProcess(size_t index)
     // Core 0 wrote the dry mono mix to both channels; read one channel.
     const q15_t dry = output_buffer_[2 * index];
 
-    // Effects chain: SoftClipper (warmth) → Svf LP → ShimmerReverb.
+    // Effects chain: SoftClipper (warmth) → Svf LP → FX B → ShimmerReverb.
     const q15_t voiced = filter_.Process(clipper_.Process(dry));
+
+    // FX B slot (pre-reverb): OFF passes voiced straight through; CRUSH/DELAY/
+    // BOTH process it, crossfaded dry↔effected by fx_mix_ (SHIFT+BANK+POT_7).
+    // The result feeds both the dry path and the reverb input, so delay echoes
+    // feed the shimmer tail (CHORD-GEN.md FX B). Delay runs stereo; its spread
+    // survives into the dry L/R because the reverb only mixes a mono sum in.
+    q15_t fx_l = voiced;
+    q15_t fx_r = voiced;
+    if (fx_b_ != FxB::OFF)
+    {
+        q15_t pre = voiced;
+        if (fx_b_ == FxB::CRUSH || fx_b_ == FxB::BOTH)
+        {
+            pre = fx_crusher_.Process(voiced);
+        }
+        q15_t wet_l = pre;
+        q15_t wet_r = pre;
+        if (fx_b_ == FxB::DELAY || fx_b_ == FxB::BOTH)
+        {
+            const StereoDelay::Output d = fx_delay_.Process(pre, pre);
+            wet_l = d.left;
+            wet_r = d.right;
+        }
+        const q15_t fx_dry = static_cast<q15_t>(Q15_MAX - fx_mix_);
+        fx_l = q15_add(q15_mult(voiced, fx_dry), q15_mult(wet_l, fx_mix_));
+        fx_r = q15_add(q15_mult(voiced, fx_dry), q15_mult(wet_r, fx_mix_));
+    }
 
     // Dry↔wet crossfade from SHIFT+POT_5 (reverb_wet_): at 0 the reverb is fully
     // bypassed (pure dry chord — a clean dry signal is always reachable), at
     // Q15_MAX it's the stereo wet tail only. Keep feeding the reverb every sample
     // regardless so the tail is continuous as the mix opens.
-    const ShimmerReverb::Output wet = reverb_.Process(voiced);
+    const q15_t rev_in = static_cast<q15_t>((fx_l + fx_r) >> 1);
+    const ShimmerReverb::Output wet = reverb_.Process(rev_in);
     const q15_t dry_gain = static_cast<q15_t>(Q15_MAX - reverb_wet_);
-    const q15_t left = q15_mult(q15_add(q15_mult(voiced, dry_gain), q15_mult(wet.left, reverb_wet_)), volume_);
-    const q15_t right = q15_mult(q15_add(q15_mult(voiced, dry_gain), q15_mult(wet.right, reverb_wet_)), volume_);
+    const q15_t left = q15_mult(q15_add(q15_mult(fx_l, dry_gain), q15_mult(wet.left, reverb_wet_)), volume_);
+    const q15_t right = q15_mult(q15_add(q15_mult(fx_r, dry_gain), q15_mult(wet.right, reverb_wet_)), volume_);
 
     output_buffer_[2 * index] = left;
     output_buffer_[2 * index + 1] = right;
@@ -774,6 +832,25 @@ void AppSummoner::UiLoop()
     reverb_.SetShimmer(pot_to_q15(pots_[Pot::SHIMMER]->GetValue()));
     const int32_t interval_zone = pots_[Pot::INTERVAL]->GetMappedValue();
     reverb_.SetInterval(static_cast<ShimmerReverb::Interval>(interval_zone >= 0 ? interval_zone : 0));
+
+    // FX B params (SHIFT+BANK fourth layer): the parameter knob (POT_5) follows
+    // the selected effect — delay time in DELAY/BOTH, crush rate+depth in CRUSH;
+    // the mix knob (POT_7) crossfades dry↔effected in SecondCoreProcess. Set at
+    // UiLoop rate while Core 1 is idle between blocks (same no-race window the
+    // reverb setters use). BOTH uses the param for delay time and the Init-time
+    // moderate crush defaults.
+    const int32_t fx_param = combo_.GetValue(SlotIndex(ComboSlot::FX_B_PARAM));
+    fx_mix_ = pot_to_q15(combo_.GetValue(SlotIndex(ComboSlot::FX_B_MIX)));
+    if (fx_b_ == FxB::DELAY || fx_b_ == FxB::BOTH)
+    {
+        const size_t delay_l = static_cast<size_t>(curve_map(fx_param, kMapFxDelay, MapClamp::TRUE));
+        fx_delay_.SetDelay(delay_l, (delay_l * 3) / 4);
+    }
+    if (fx_b_ == FxB::CRUSH)
+    {
+        fx_crusher_.SetSampleRate(static_cast<q15_t>(curve_map(fx_param, kMapFxCrushRate, MapClamp::TRUE)));
+        fx_crusher_.SetBitDepth(static_cast<uint32_t>(curve_map(fx_param, kMapFxCrushBits, MapClamp::TRUE)));
+    }
 
     // Quantizer scale: BANK+POT_1 stepped over the default scale table
     const int32_t scale_index = pots_[Pot::SCALE]->GetMappedValue();
