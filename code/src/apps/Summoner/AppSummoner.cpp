@@ -125,6 +125,15 @@ constexpr auto kMapFxCrushBits = MapDef<int32_t, 3>{
 // FX B delay feedback — fixed; a few repeats without runaway self-oscillation.
 constexpr q15_t kFxDelayFeedback = q15(0.4f);
 
+// FX B power-on defaults for the two SHIFT+BANK slots. The combo layer defaults
+// every slot to 0, which for FX B mix means "fully dry" — cycling to Delay/Crush
+// would then be silent until the user discovers SHIFT+BANK+POT_7. Seed an
+// audible mix and a musical mid-range parameter so a plain BANK cycle is heard
+// immediately; the pickup logic keeps these until POT_5/POT_7 are actually moved
+// in the fourth layer.
+constexpr int32_t kFxMixDefault = pot(0.6f);   // ~60% wet — clearly audible
+constexpr int32_t kFxParamDefault = pot(0.4f); // ~mid delay time / crush amount
+
 // SHIFT+BANK fourth-layer slot -> physical pot (index = ComboSlot)
 constexpr std::array<Hardware::Pot, SummonerComboLayer::kNumSlots> kComboSlotPots = {
     Hardware::Pot::POT_1,
@@ -159,6 +168,15 @@ void AppSummoner::Init()
     // so disable both stock gain features and free the SHIFT layer for the app.
     Kastle2::base.SetFeatureEnabled(Base::Feature::INPUT_GAIN, false);
     Kastle2::base.SetFeatureEnabled(Base::Feature::OUTPUT_GAIN, false);
+
+    // LED_1 is the app's FX B state indicator (fx_colors_). Base's stock input
+    // loudness meter (INPUT_INDICATION, in BeforeUiLoop) and its red clip flash
+    // (INPUT_INDICATION_CLIP, in AfterUiLoop — runs *after* the app's UiLoop and
+    // would override our color) both write LED_1. Disable both so the FX B color
+    // is the only thing on that LED (WaveBard disables the clip one for the same
+    // reason). The app has no audio-input meter to show anyway.
+    Kastle2::base.SetFeatureEnabled(Base::Feature::INPUT_INDICATION, false);
+    Kastle2::base.SetFeatureEnabled(Base::Feature::INPUT_INDICATION_CLIP, false);
 
     for (size_t v = 0; v < kNumVoices; v++)
     {
@@ -336,6 +354,10 @@ void AppSummoner::Init()
 
     combo_.Init();
     combo_.SetSlotValue(SlotIndex(ComboSlot::WAVEFORM), kWaveformDefaultSlotValue);
+    // FX B mix/param aren't EEPROM-persisted; seed audible defaults so a BANK
+    // cycle to Delay/Crush is heard without first hunting for SHIFT+BANK+POT_7.
+    combo_.SetSlotValue(SlotIndex(ComboSlot::FX_B_MIX), kFxMixDefault);
+    combo_.SetSlotValue(SlotIndex(ComboSlot::FX_B_PARAM), kFxParamDefault);
     uint8_t waveform_mem = 0;
     if (Kastle2::memory.Read8(kMemWaveform, &waveform_mem))
     {
