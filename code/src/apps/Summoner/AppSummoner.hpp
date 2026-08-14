@@ -109,7 +109,7 @@ private:
      */
     enum class Pot
     {
-        VOLUME,       ///< POT_5 primary: output volume
+        VOLUME,       ///< SHIFT+POT_5: output volume (moved from primary 2026-08-13 swap)
         PITCH_OFFSET, ///< POT_1 primary: chord root transpose (+-1 octave)
         DECAY,        ///< POT_4 primary: decay / note length
         VOICING,      ///< POT_2 primary: voicing sweep close -> open -> extended
@@ -125,7 +125,7 @@ private:
         LENGTH,       ///< BANK+POT_4: euclidean cycle length K (stepped, 2-16)
         RESONANCE,    ///< BANK+POT_6: filter resonance
         LFO_AMOUNT,   ///< BANK+POT_7: LFO TRI jack amplitude/polarity (attenuverter, center = flat 0V)
-        REVERB_BLEND, ///< SHIFT+POT_5: reverb combo — dry->wet then decay short->long (SummonerReverbBlend)
+        REVERB_BLEND, ///< POT_5 primary: reverb combo — dry->wet then decay short->long (SummonerReverbBlend; moved to primary 2026-08-13 swap)
         SHIMMER,      ///< BANK+POT_5: shimmer amount (clean plate -> infinite shimmer, granular extreme at top)
         INTERVAL,     ///< SHIFT+POT_2: shimmer pitch interval (octave-down / fifth / octave / two-octave)
         COUNT

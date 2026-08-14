@@ -216,9 +216,14 @@ void AppSummoner::Init()
     quantizer_.SetScale(Quantizer::DefaultScale::CHROMATIC);
 
     // Normal layer
-    pots_[Pot::VOLUME] = FancyPot::Create({
+    // POT_5 primary is the reverb combo (Phase 10 swap 2026-08-13): the dry/wet
+    // + decay knob is the live-play control, on the front street. Volume moves to
+    // SHIFT+POT_5 (set-and-forget). OUTPUT_GAIN stays disabled (see Init above),
+    // so no stock gain scales the buffer with volume now physically on that pot.
+    pots_[Pot::REVERB_BLEND] = FancyPot::Create({
         .pot = Hardware::Pot::POT_5,
         .layer = Hardware::Layer::NORMAL,
+        .initial_value = POT_MIN, // fully dry on power-up (dry chord, no reverb)
     });
 
     pots_[Pot::PITCH_OFFSET] = FancyPot::Create({
@@ -276,10 +281,10 @@ void AppSummoner::Init()
         .initial_value = POT_MAX, // filter open on power-up
     });
 
-    pots_[Pot::REVERB_BLEND] = FancyPot::Create({
+    pots_[Pot::VOLUME] = FancyPot::Create({
         .pot = Hardware::Pot::POT_5,
         .layer = Hardware::Layer::SHIFT,
-        .initial_value = POT_MIN, // fully dry on power-up (dry chord, no reverb)
+        .initial_value = POT_MAX, // full volume on power-up (set-and-forget)
     });
 
     pots_[Pot::INTERVAL] = FancyPot::Create({
@@ -845,9 +850,10 @@ void AppSummoner::UiLoop()
     filter_.SetFrequency(SummonerTimbre::ModulatedCutoffHz(cutoff_base, env_amount, env_mix_));
     filter_.SetResonance(curve_map(pots_[Pot::RESONANCE]->GetValue(), kMapResonance, MapClamp::TRUE));
 
-    // ShimmerReverb (Core 1): SHIFT+POT_5 is the dry↔wet + decay combo knob
+    // ShimmerReverb (Core 1): POT_5 primary is the dry↔wet + decay combo knob
     // (SummonerReverbBlend — 0 = fully dry, 50% = short/very-wet, 100% = long/
-    // very-wet); shimmer amount BANK+POT_5 (top crosses into the granular-extreme
+    // very-wet; moved to primary in the 2026-08-13 swap, volume now SHIFT+POT_5);
+    // shimmer amount BANK+POT_5 (top crosses into the granular-extreme
     // cloud internally); interval SHIFT+POT_2 stepped over the 4 pitch zones. Set
     // here at UiLoop rate while Core 1 is idle between blocks — no cross-core race.
     const SummonerReverbBlend::Result blend =
