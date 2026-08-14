@@ -1,4 +1,5 @@
 #include "AppSummoner.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include "common/core/Kastle2.hpp"
@@ -419,13 +420,23 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
             if (fired & (1u << v))
             {
                 envs_[v].Trigger();
+                noise_env_[v] = 0; // restart the noise attack ramp (folded knob)
             }
             const q15_t env = q31_to_q15(envs_[v].Process(sustain_gate_));
             env_sum += env;
+            // Noise gets its own attack ramp before the equal-power blend: instant
+            // below the knob's 50% center (immediate chiff), swelling in above it
+            // (SummonerNoiseFold). A huge inc collapses the ramp to instant.
+            noise_env_[v] += noise_attack_inc_;
+            if (noise_env_[v] > Q15_MAX)
+            {
+                noise_env_[v] = Q15_MAX;
+            }
+            const q15_t noise_atk = q15_mult(noises_[v].Process(), static_cast<q15_t>(noise_env_[v]));
             // Equal-power noise blend, pre-envelope and pre-filter — the same
             // envelope and cutoff shape both tone and noise together
             const q15_t tone = q15_add(q15_mult(oscs_[v].Process(), noise_dry_gain_),
-                                       q15_mult(noises_[v].Process(), noise_wet_gain_));
+                                       q15_mult(noise_atk, noise_wet_gain_));
             mix += q15_mult(tone, env);
         }
 
@@ -655,13 +666,21 @@ void AppSummoner::ApplyComboSlots(const bool force)
         detune_mult_[3] = std::exp2(2.0f * d / 1200.0f);
     }
 
-    // Noise blend: equal-power gains recomputed only on slot change so the
-    // trig calls stay out of the audio path
+    // Noise blend (folded, Phase 10): the knob folds blend amount with a noise-
+    // specific attack (SummonerNoiseFold). Equal-power gains use the folded
+    // amount (max from the 50% center up); the attack time sets a per-sample
+    // ramp increment for the per-voice noise envelopes. Recomputed on slot
+    // change so the trig / divide stay out of the audio path.
     if (force || combo_.HasChanged(SlotIndex(ComboSlot::NOISE_BLEND)))
     {
-        const q15_t blend = pot_to_q15(combo_.GetValue(SlotIndex(ComboSlot::NOISE_BLEND)));
-        noise_dry_gain_ = NoiseBlendGainDry(blend);
-        noise_wet_gain_ = NoiseBlendGainWet(blend);
+        const SummonerNoiseFold::Result nf =
+            SummonerNoiseFold::Compute(pot_to_q15(combo_.GetValue(SlotIndex(ComboSlot::NOISE_BLEND))));
+        noise_dry_gain_ = NoiseBlendGainDry(nf.amount);
+        noise_wet_gain_ = NoiseBlendGainWet(nf.amount);
+        const float samples = nf.attack * static_cast<float>(SAMPLE_RATE);
+        noise_attack_inc_ = (samples < 1.0f)
+                                ? Q15_MAX
+                                : std::max<int32_t>(1, static_cast<int32_t>(Q15_MAX / samples));
     }
 
     // Groove: humanize (bottom zone) feeds the strum scheduler at the next

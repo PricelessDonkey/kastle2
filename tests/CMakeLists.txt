@@ -63,6 +63,7 @@ set(TEST_SOURCES
     dsp/test_summoner_lfo_shape.cpp
     dsp/test_summoner_chords.cpp
     dsp/test_summoner_envelope.cpp
+    dsp/test_summoner_noise_fold.cpp
     dsp/test_summoner_sequencer.cpp
     dsp/test_summoner_strum.cpp
     dsp/test_summoner_timbre.cpp

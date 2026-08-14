@@ -24,6 +24,7 @@
 #include "SummonerChords.hpp"
 #include "SummonerComboLayer.hpp"
 #include "SummonerEnvelope.hpp"
+#include "SummonerNoiseFold.hpp"
 #include "SummonerSequencer.hpp"
 #include "SummonerGroove.hpp"
 #include "SummonerLfoShape.hpp"
@@ -201,6 +202,15 @@ private:
     /// on slot change in ApplyComboSlots — the trig stays out of AudioLoop
     q15_t noise_dry_gain_ = Q15_MAX;
     q15_t noise_wet_gain_ = 0;
+
+    /// Folded noise-blend attack (Phase 10, SummonerNoiseFold): the noise gets
+    /// its own per-voice attack ramp before the equal-power blend. Below the
+    /// knob's 50% center the ramp is instant (immediate chiff); above it the
+    /// noise swells in, the attack time scaling with knob position. Each voice's
+    /// ramp resets on trigger and climbs by noise_attack_inc_ per sample to
+    /// Q15_MAX (a huge inc = instant). Recomputed on slot change.
+    std::array<int32_t, kNumVoices> noise_env_ = {}; ///< Per-voice noise attack ramp, 0..Q15_MAX
+    int32_t noise_attack_inc_ = Q15_MAX;             ///< Per-sample ramp step (Q15_MAX = instant)
 
     // Effects chain — runs on Core 1 (Phase 7): mix (Core 0) -> SoftClipper ->
     // Svf LP -> ShimmerReverb -> volume. Core 0 writes the dry mono mix to the
