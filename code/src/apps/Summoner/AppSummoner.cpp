@@ -30,11 +30,6 @@ constexpr uint32_t kLfoShapeSeed = 0x1F0BEA71;
 // Pitch offset (POT_1) range: +-1 octave around center
 constexpr float kPitchOffsetOctaves = 1.0f;
 
-// Decay/length (POT_4 + attenuated LENGTH MOD CV): short pluck to long pad
-constexpr auto kMapDecay = MapDef<float, 5>{
-    {pot(0.0f), pot(0.25f), pot(0.5f), pot(0.75f), pot(1.0f)},
-    {0.03f, 0.12f, 0.4f, 1.2f, 4.0f}};
-
 // Strum speed (SHIFT+POT_3, knob-only since the 2026-08-12 direction/speed
 // swap): frames between adjacent voices, 0 -> 300ms at 44kHz
 // (per the CHORD-GEN.md strum table: 0 / ~8ms / ~30ms / ~80ms / ~300ms)
@@ -58,11 +53,6 @@ constexpr auto kMapPortamento = MapDef<float, 5>{
 // PARAM_1 movement that releases the PATTERN R voicing snap (~2% of range,
 // safely above unconnected-jack ADC noise)
 constexpr int32_t kVoicingSnapCvRelease = pot(0.02f);
-
-// Attack time (SHIFT+BANK+POT_4): struck feel to slow pad swell
-constexpr auto kMapAttack = MapDef<float, 5>{
-    {pot(0.0f), pot(0.25f), pot(0.5f), pot(0.75f), pot(1.0f)},
-    {0.002f, 0.02f, 0.1f, 0.4f, 1.0f}};
 
 // Detune spread (SHIFT+BANK+POT_1): max per-voice offset in cents — modest so
 // it reads as thickness, not out-of-tune (CHORD-GEN.md Voices)
@@ -679,15 +669,9 @@ void AppSummoner::ApplyComboSlots(const bool force)
     groove_q15_ = pot_to_q15(combo_.GetValue(SlotIndex(ComboSlot::GROOVE)));
     humanize_ = SummonerGroove::HumanizeFromQ15(groove_q15_);
 
-    // Attack time
-    if (force || combo_.HasChanged(SlotIndex(ComboSlot::ATTACK)))
-    {
-        const float attack_time = curve_map(combo_.GetValue(SlotIndex(ComboSlot::ATTACK)), kMapAttack, MapClamp::TRUE);
-        for (size_t v = 0; v < kNumVoices; v++)
-        {
-            envs_[v].SetAttackTime(attack_time);
-        }
-    }
+    // Attack time: retired 2026-08-13 (Phase 10). Attack is now folded onto the
+    // primary POT_4 knob (SummonerEnvelope, see UiLoop) — the standalone
+    // SHIFT+BANK+POT_4 control is no longer read, freeing that fourth-layer slot.
 }
 
 void AppSummoner::UiLoop()
@@ -878,15 +862,21 @@ void AppSummoner::UiLoop()
     const int32_t scale_index = pots_[Pot::SCALE]->GetMappedValue();
     quantizer_.SetScale(scale_index >= 0 ? scale_index : 0);
 
-    // Decay/length: POT_4 summed with LENGTH MOD CV (PARAM_3) attenuated by
-    // SHIFT+POT_4, same time on all voices
+    // Folded envelope knob (POT_4, Phase 10): the CV (PARAM_3, attenuated by
+    // SHIFT+POT_4) sums into the knob position *before* the fold, so modulation
+    // traverses the same V-shaped decay + upper-half attack curve. Decay is
+    // long→short→long about the 50% center; attack is instant across the lower
+    // half and ramps in across the upper half (SummonerEnvelope, host-tested).
+    // Same time/attack on all voices. Retires the standalone attack control
+    // (SHIFT+BANK+POT_4) — see ApplyComboSlots.
     const int32_t decay_cv = apply_pot_mod(Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PARAM_3),
                                            pots_[Pot::LENGTH_ATTEN]->GetValue());
-    const int32_t decay_val = pots_[Pot::DECAY]->GetValue() + decay_cv;
-    const float decay_time = curve_map(decay_val, kMapDecay, MapClamp::TRUE);
+    const int32_t env_val = pots_[Pot::DECAY]->GetValue() + decay_cv;
+    const SummonerEnvelope::Result env_times = SummonerEnvelope::Compute(pot_to_q15(env_val));
     for (size_t v = 0; v < kNumVoices; v++)
     {
-        envs_[v].SetDecayTime(decay_time);
+        envs_[v].SetDecayTime(env_times.decay);
+        envs_[v].SetAttackTime(env_times.attack);
     }
 
     // Sustain gate: chord holds at 60% while PATTERN G is high (analog tri-state,

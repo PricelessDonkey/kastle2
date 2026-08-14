@@ -23,6 +23,7 @@
 #include "common/dsp/utility/Quantizer.hpp"
 #include "SummonerChords.hpp"
 #include "SummonerComboLayer.hpp"
+#include "SummonerEnvelope.hpp"
 #include "SummonerSequencer.hpp"
 #include "SummonerGroove.hpp"
 #include "SummonerLfoShape.hpp"
@@ -138,7 +139,7 @@ private:
         DETUNE,      ///< POT_1: voice detune / spread
         WAVEFORM,    ///< POT_2: voice waveform select (sine/tri/saw/square)
         GROOVE,      ///< POT_3: humanize / swing / skip zones (expanded 2026-08-12)
-        ATTACK,      ///< POT_4: envelope attack time
+        ATTACK,      ///< POT_4: (retired 2026-08-13 — attack folded onto primary POT_4; slot now free)
         FX_B_PARAM,  ///< POT_5: FX B parameter (stub until Phase 8)
         NOISE_BLEND, ///< POT_6: white-noise blend into the voices (equal-power)
         FX_B_MIX,    ///< POT_7: FX B mix (stub until Phase 8)
