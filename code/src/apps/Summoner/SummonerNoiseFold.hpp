@@ -20,19 +20,24 @@ namespace kastle2
  * Folds "how much noise" and "how the noise enters" onto one knob, inflecting at
  * 50% (CHORD-GEN.md Noise blend §):
  *
- * - Amount: 0 (no noise) at 0% → ramps to max at 50% → held max across 50→100%.
+ * - Amount is a **tent** peaking at 50% (revised 2026-08-14): 0 (no noise) at 0%
+ *   → rises to kMaxAmount at 50% → falls back to kMinAmount at 100%. 50% is the
+ *   loudest noise; both ends are quiet. kMaxAmount is deliberately short of full
+ *   because at full equal-power blend the tone gain is exactly 0 and the chord
+ *   vanishes into pure noise — the voice must stay present at every position.
  * - Noise attack, lower vs upper half:
- *   - 0–50%: no attack — noise is blended at full level from the note onset
- *     (immediate, percussive chiff; this is the old constant-blend behavior,
- *     rescoped to the bottom half).
- *   - 50→100%: a noise-specific attack envelope ramps in, its time scaling with
- *     knob position (none at 50%, a little at 60%, a lot at 100%), so the noise
- *     swells in later and later after the transient.
+ *   - 0–50%: short attack — noise is essentially immediate at the note onset
+ *     (percussive chiff; the old constant-blend behavior, rescoped to the bottom
+ *     half).
+ *   - 50→100%: a slow attack ramps in, its time scaling with knob position (none
+ *     at 50%, a little at 60%, a lot at 100%), so the noise swells in later and
+ *     later after the transient.
  *
- * "No noise at 100%" is perceptual: amount is still max, but the attack is long
- * enough that little noise enters during a typical note — a slow airy bloom only
- * under sustained notes, effectively clean at onset. Continuous at 50% (upper-
- * half attack starts at 0). Same "fold at 50%" idiom as SummonerEnvelope.
+ * So the two halves are distinct characters, not two amounts of the same thing:
+ * below 50% a loud immediate chiff that grows; above 50% a quieter, slower airy
+ * bloom that fades away as the knob opens — quiet *and* late at 100%. Continuous
+ * at 50% (both curves meet: peak amount, zero attack). Same "fold at 50%" idiom
+ * as SummonerEnvelope.
  *
  * The attack envelope itself lives in the app (per-voice ramp); this maps the
  * knob to the equal-power blend amount and the attack time in seconds.
@@ -42,11 +47,20 @@ struct SummonerNoiseFold
     /** @brief Noise parameters for one knob position. */
     struct Result
     {
-        q15_t amount; ///< Equal-power blend amount 0..Q15_MAX (max across the upper half)
+        q15_t amount; ///< Equal-power blend amount — tent: 0 → kMaxAmount at 50% → kMinAmount at 100%
         float attack; ///< Noise attack time in seconds (0 across the lower half)
     };
 
     static constexpr float kMaxAttack = 1.5f; ///< Slowest noise swell (at 100%)
+
+    /// Blend ceiling at the 50% peak — 70% of full. Equal-power at 70% leaves the
+    /// tone at cos(0.7·π/2) ≈ 0.45, so the chord stays clearly audible under the
+    /// noise (2026-08-14: full blend silenced the voice).
+    static constexpr q15_t kMaxAmount = static_cast<q15_t>(Q15_MAX * 7 / 10);
+
+    /// Blend floor at 100% — a faint 15%, not zero: the top of the knob is a
+    /// quiet slow bloom rather than a second "off" position duplicating 0%.
+    static constexpr q15_t kMinAmount = static_cast<q15_t>(Q15_MAX * 15 / 100);
 
     /**
      * @brief Map a knob value (0..Q15_MAX) to blend amount + noise attack time.
@@ -66,15 +80,20 @@ struct SummonerNoiseFold
 
         Result r;
 
-        // Amount: ramps 0 → full across the lower half, then held full.
+        // Amount tent: 0 → kMaxAmount across the lower half, kMaxAmount →
+        // kMinAmount across the upper. Peak (loudest noise) sits at 50%; never
+        // full, so the voice survives under the noise at every position.
         if (x <= Q15_HALF)
         {
-            int32_t amt = static_cast<int32_t>(x) * Q15_MAX / Q15_HALF;
-            r.amount = static_cast<q15_t>(amt > Q15_MAX ? Q15_MAX : amt);
+            const int32_t amt = static_cast<int32_t>(x) * kMaxAmount / Q15_HALF;
+            r.amount = static_cast<q15_t>(amt > kMaxAmount ? kMaxAmount : amt);
         }
         else
         {
-            r.amount = Q15_MAX;
+            const int32_t up = static_cast<int32_t>(x) - Q15_HALF;
+            const int32_t span = Q15_MAX - Q15_HALF;
+            const int32_t amt = kMaxAmount - (kMaxAmount - kMinAmount) * up / span;
+            r.amount = static_cast<q15_t>(amt < kMinAmount ? kMinAmount : amt);
         }
 
         // Attack: instant (0) below/at center; ramps in across the upper half
