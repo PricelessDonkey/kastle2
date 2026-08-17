@@ -144,6 +144,18 @@ public:
     }
 
     /**
+     * @brief Measured clock step period in audio frames; 0 until two ticks have
+     *        been seen. Swing uses it internally; the tremolo gate (Phase 11)
+     *        reads it here so the app has exactly one measurement of the step
+     *        period — do not add a second.
+     * @return Frames between the last two clock ticks, or 0 if not yet measured.
+     */
+    int32_t GetPeriodFrames() const
+    {
+        return period_frames_;
+    }
+
+    /**
      * @brief Cancels any pending deferred fire (PATTERN R reset behavior).
      */
     void Reset()

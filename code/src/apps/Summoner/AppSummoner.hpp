@@ -19,7 +19,6 @@
 #include "common/dsp/synthesis/WhiteNoise.hpp"
 #include "common/dsp/utility/EdgeDetector.hpp"
 #include "common/dsp/utility/EuclideanPattern.hpp"
-#include "common/dsp/utility/Portamento.hpp"
 #include "common/dsp/utility/Quantizer.hpp"
 #include "SummonerChords.hpp"
 #include "SummonerComboLayer.hpp"
@@ -29,6 +28,7 @@
 #include "SummonerGroove.hpp"
 #include "SummonerLfoShape.hpp"
 #include "SummonerReverbBlend.hpp"
+#include "SummonerTremolo.hpp"
 #include "SummonerStrum.hpp"
 #include "SummonerVoiceEnv.hpp"
 
@@ -117,7 +117,7 @@ private:
         VOICING,      ///< POT_2 primary: voicing sweep close -> open -> extended
         STRUM_DIR,    ///< POT_3 primary: strum direction, 6 zones + PARAM_2 CV (swapped with speed 2026-08-12)
         QUALITY,      ///< POT_6 primary: chord quality zones (major ... dim)
-        PORTAMENTO,   ///< SHIFT+POT_1: portamento time on the chord root
+        TREMOLO,      ///< SHIFT+POT_1: tempo-synced tremolo rate, folded at 50% (replaced portamento 2026-08-16)
         STRUM_SPEED,  ///< SHIFT+POT_3: strum speed, 0 = block chord, max = slow arpeggio (knob-only)
         LENGTH_ATTEN, ///< SHIFT+POT_4: LENGTH MOD CV attenuation
         CUTOFF,       ///< SHIFT+POT_6: filter cutoff
@@ -142,7 +142,7 @@ private:
         DETUNE,      ///< POT_1: voice detune / spread
         WAVEFORM,    ///< POT_2: voice waveform select (sine/tri/saw/square)
         GROOVE,      ///< POT_3: humanize / swing / skip zones (expanded 2026-08-12)
-        ATTACK,      ///< POT_4: (retired 2026-08-13 — attack folded onto primary POT_4; slot now free)
+        TREM_DEPTH,  ///< POT_4: tremolo gate depth (2026-08-16; held envelope attack until Phase 10 folded it onto primary POT_4)
         FX_B_PARAM,  ///< POT_5: FX B parameter (stub until Phase 8)
         NOISE_BLEND, ///< POT_6: white-noise blend into the voices (equal-power)
         FX_B_MIX,    ///< POT_7: FX B mix (stub until Phase 8)
@@ -256,10 +256,10 @@ private:
     bool voicing_snap_ = false;
     int32_t voicing_cv_at_snap_ = 0;
 
-    // Portamento on the chord root: the glide runs in log2-frequency space so
-    // it sounds linear in pitch; voices scale by glided/target ratio
-    Portamento portamento_;
-    float root_pitch_target_ = 0.0f;                  ///< log2(target root Hz), set at fire time
+    // Tempo-synced tremolo gate (SHIFT+POT_1 rate, SHIFT+BANK+POT_4 depth).
+    // Replaced portamento 2026-08-16 — see SummonerTremolo / CHORD-GEN.md.
+    SummonerTremolo tremolo_;
+    bool trem_bass_exempt_ = false;                   ///< Upper knob half: voice 0 sustains through the chop
     std::array<float, kNumVoices> voice_freq_ = {};   ///< Chord tone frequencies (pre-detune) from the last fire
 
     // Pots

@@ -46,11 +46,6 @@ constexpr int32_t kDirDefaultValue = pot(0.08f);
 // knob turn) — same gesture timing as the stock apps' bank/mode buttons
 constexpr uint32_t kModeShortPressUnder = s2alr(1.5f);
 
-// Portamento time (SHIFT+POT_1): off at zero, up to a slow 2s glide
-constexpr auto kMapPortamento = MapDef<float, 5>{
-    {pot(0.0f), pot(0.25f), pot(0.5f), pot(0.75f), pot(1.0f)},
-    {0.0f, 0.05f, 0.2f, 0.6f, 2.0f}};
-
 // PARAM_1 movement that releases the PATTERN R voicing snap (~2% of range,
 // safely above unconnected-jack ADC noise)
 constexpr int32_t kVoicingSnapCvRelease = pot(0.02f);
@@ -152,8 +147,8 @@ void AppSummoner::Init()
     Kastle2::base.SetFeatureEnabled(Base::Feature::LFO_OUT, false);
 
     // Base's stock INPUT_GAIN reads SHIFT+POT_1, which this app repurposes for
-    // portamento — disable it (it would scale the input path off a knob that
-    // means something else here).
+    // the tremolo rate (portamento until 2026-08-16) — disable it either way,
+    // it would scale the input path off a knob that means something else here.
     Kastle2::base.SetFeatureEnabled(Base::Feature::INPUT_GAIN, false);
 
     // OUTPUT_GAIN (stock main volume) is *kept enabled* as of 2026-08-14. It was
@@ -218,8 +213,7 @@ void AppSummoner::Init()
 
     euclid_.Init(); // power-on default: hits = length = 16, a chord on every tick
 
-    portamento_.Init(AUDIO_LOOP_RATE);
-    root_pitch_target_ = std::log2(kRootBase);
+    tremolo_.Init(SAMPLE_RATE);
 
     quantizer_.Init(0.8f);
     quantizer_.SetEnabled(true);
@@ -267,10 +261,12 @@ void AppSummoner::Init()
     });
 
     // Shift layer
-    pots_[Pot::PORTAMENTO] = FancyPot::Create({
+    // No map_size: SummonerTremolo quantizes the knob itself (as
+    // SummonerNoiseFold does), so the FancyPot stays continuous.
+    pots_[Pot::TREMOLO] = FancyPot::Create({
         .pot = Hardware::Pot::POT_1,
         .layer = Hardware::Layer::SHIFT,
-        .initial_value = POT_MIN, // no glide until Phase 4 wires it
+        .initial_value = POT_MIN, // tremolo OFF on power-up
     });
 
     pots_[Pot::STRUM_SPEED] = FancyPot::Create({
@@ -353,8 +349,6 @@ void AppSummoner::Init()
         pot->Init(AUDIO_LOOP_RATE);
     }
 
-    portamento_.SetSpeed(curve_map(pots_[Pot::PORTAMENTO]->GetValue(), kMapPortamento, MapClamp::TRUE));
-
     combo_.Init();
     combo_.SetSlotValue(SlotIndex(ComboSlot::WAVEFORM), kWaveformDefaultSlotValue);
     // FX B mix/param aren't EEPROM-persisted; seed audible defaults so a BANK
@@ -406,8 +400,6 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
         do_fire_ = true;
     }
 
-    portamento_.TimeTick();
-
     // Hand the block to Core 1 (WaveBard/FxWizard lock-step). Core 0 synthesises
     // each dry mono sample into the output buffer, then requests Core 1 to run
     // the effects chain (clipper → Svf → ShimmerReverb → volume) on it in place.
@@ -424,6 +416,10 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
             groove_fire_ = true;
         }
         const uint32_t fired = strum_.Tick();
+        // Tremolo gate: pre-FX and per-voice, so reverb/delay tails ring through
+        // the gaps. env_sum stays un-gated below — it drives ENV_OUT and the
+        // filter cutoff, and gating it would make the chop read as a filter sweep.
+        const q15_t trem_gain = tremolo_.Tick();
         int32_t mix = 0;
         int32_t env_sum = 0;
 
@@ -449,7 +445,10 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
             // envelope and cutoff shape both tone and noise together
             const q15_t tone = q15_add(q15_mult(oscs_[v].Process(), noise_dry_gain_),
                                        q15_mult(noise_atk, noise_wet_gain_));
-            mix += q15_mult(tone, env);
+            // Voice 0 (root/bass) is exempt across the knob's upper half — the
+            // low end sustains while the upper voices are chopped.
+            const q15_t vg = (trem_bass_exempt_ && v == 0) ? Q15_MAX : trem_gain;
+            mix += q15_mult(q15_mult(tone, env), vg);
         }
 
         env_mix_ = static_cast<q15_t>(env_sum / static_cast<int32_t>(kNumVoices));
@@ -583,10 +582,6 @@ void AppSummoner::FireChord()
     float root = cv_to_freq_raw(kRootBase, note_cv);
     root *= std::pow(2.0f, offset * kPitchOffsetOctaves);
 
-    // Portamento glides toward the new root: chord tones are computed from the
-    // target and scaled by the glide ratio each UiLoop pass
-    root_pitch_target_ = std::log2(root);
-
     // Quality: POT_6 zones (0/15/30/45/60/75/85/100% per the design table)
     // summed with the BANK/MODE CV — stepped zone selection like stock bank select
     const int32_t quality_val = pots_[Pot::QUALITY]->GetValue() +
@@ -702,9 +697,16 @@ void AppSummoner::ApplyComboSlots(const bool force)
     groove_q15_ = pot_to_q15(combo_.GetValue(SlotIndex(ComboSlot::GROOVE)));
     humanize_ = SummonerGroove::HumanizeFromQ15(groove_q15_);
 
-    // Attack time: retired 2026-08-13 (Phase 10). Attack is now folded onto the
-    // primary POT_4 knob (SummonerEnvelope, see UiLoop) — the standalone
-    // SHIFT+BANK+POT_4 control is no longer read, freeing that fourth-layer slot.
+    // Tremolo depth (SHIFT+BANK+POT_4): how far the gate's off phase drops.
+    // This slot held the standalone envelope attack until Phase 10 folded attack
+    // onto the primary POT_4 knob (2026-08-13); the ComboSlot index is reused
+    // as-is, so kNumSlots and the EEPROM layout are unchanged. Defaults to full
+    // depth so the effect is audible without hunting the fourth layer (the same
+    // lesson as the Phase 8 FX B mix defaults).
+    if (force || combo_.HasChanged(SlotIndex(ComboSlot::TREM_DEPTH)))
+    {
+        tremolo_.SetDepth(pot_to_q15(combo_.GetValue(SlotIndex(ComboSlot::TREM_DEPTH))));
+    }
 }
 
 void AppSummoner::UiLoop()
@@ -736,6 +738,7 @@ void AppSummoner::UiLoop()
     {
         clock_tick_ = false;
         groove_.OnClockTick();
+        tremolo_.OnClockTick(); // re-lock the gate so it can't drift off the grid
         if (euclid_.Step())
         {
             switch (groove_.ProcessHit(euclid_.GetStep(), groove_q15_))
@@ -794,24 +797,27 @@ void AppSummoner::UiLoop()
         }
     }
 
-    // Portamento: glide the root in pitch space and scale all chord tones by
-    // the glide ratio (1.0 once the glide lands); detune spread on top
-    if (pots_[Pot::PORTAMENTO]->HasChanged())
-    {
-        portamento_.SetSpeed(curve_map(pots_[Pot::PORTAMENTO]->GetValue(), kMapPortamento, MapClamp::TRUE));
-    }
-    const float glided_pitch = portamento_.Track(root_pitch_target_);
-    const float glide_ratio = std::exp2(glided_pitch - root_pitch_target_);
+    // Voice frequencies: the chord tones from the last fire, detune spread on
+    // top (voice 0 stays true). The portamento glide-ratio term was removed
+    // 2026-08-16 with the portamento retirement.
     for (size_t v = 0; v < kNumVoices; v++)
     {
-        oscs_[v].SetFrequency(fmin(voice_freq_[v] * glide_ratio * detune_mult_[v], kMaxPitchHz));
+        oscs_[v].SetFrequency(fmin(voice_freq_[v] * detune_mult_[v], kMaxPitchHz));
     }
 
-    // Root pitch 1V/oct out: the sounding root — quantized and glided, detune
-    // never applies to voice 0 — with C3 (kRootBase, the 0V-CV root) = 0V out.
+    // Tremolo (SHIFT+POT_1): the knob quantizes to a ratio of the clock step
+    // period, which Groove already measures — one source of truth. Set here at
+    // UiLoop rate, never in the audio loop (the divide stays out of it).
+    const SummonerTremolo::Setting trem =
+        SummonerTremolo::FromQ15(pot_to_q15(pots_[Pot::TREMOLO]->GetValue()));
+    trem_bass_exempt_ = trem.bass_exempt;
+    tremolo_.SetPeriodFrames(groove_.GetPeriodFrames(), trem.ratio_index);
+
+    // Root pitch 1V/oct out: the sounding root — quantized, detune never applies
+    // to voice 0 — with C3 (kRootBase, the 0V-CV root) = 0V out.
     // DAC_1V is USB-power calibration only (HARDWARE.md); roots below C3 clamp
     // to 0V inside SetCvOut.
-    const float root_octaves = std::log2(voice_freq_[0] * glide_ratio / kRootBase);
+    const float root_octaves = std::log2(voice_freq_[0] / kRootBase);
     Kastle2::hw.SetCvOut(static_cast<int32_t>(root_octaves * static_cast<float>(DAC_1V) + 0.5f));
 
     // Volume: nothing to do here — Base's stock OUTPUT_GAIN owns SHIFT+POT_5
