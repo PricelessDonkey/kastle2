@@ -151,14 +151,24 @@ void AppSummoner::Init()
     Kastle2::base.SetFeatureEnabled(Base::Feature::GATE_OUT, false);
     Kastle2::base.SetFeatureEnabled(Base::Feature::LFO_OUT, false);
 
-    // Base's stock INPUT_GAIN (SHIFT+POT_1) and OUTPUT_GAIN (SHIFT+POT_5) read
-    // the same physical pots this app repurposes (portamento on SHIFT+POT_1,
-    // reverb blend on SHIFT+POT_5). Left enabled, OUTPUT_GAIN silently scales
-    // the whole output buffer to 0 when the reverb knob is low — indistinguish-
-    // able from "the volume died". The app owns its own volume (POT_5 NORMAL),
-    // so disable both stock gain features and free the SHIFT layer for the app.
+    // Base's stock INPUT_GAIN reads SHIFT+POT_1, which this app repurposes for
+    // portamento — disable it (it would scale the input path off a knob that
+    // means something else here).
     Kastle2::base.SetFeatureEnabled(Base::Feature::INPUT_GAIN, false);
-    Kastle2::base.SetFeatureEnabled(Base::Feature::OUTPUT_GAIN, false);
+
+    // OUTPUT_GAIN (stock main volume) is *kept enabled* as of 2026-08-14. It was
+    // disabled in 7bfbd6f because the reverb blend then lived on SHIFT+POT_5 and
+    // the stock gain silently scaled the buffer to 0 with it; the Phase 10 swap
+    // put volume back on SHIFT+POT_5, so the collision is gone and Base's pot is
+    // pointing at the right control again. The app's own digital volume (a plain
+    // q15 multiply in SecondCoreProcess) is retired with it: Base's version also
+    // drives the codec headphone volume (SetHpVolume) as well as the digital
+    // gain, which is what actually tames the analog output level — a digital-only
+    // volume left the output hot no matter where the knob sat. Bonus: the stock
+    // control is EEPROM-persisted (ADDR_OUTPUT_GAIN) and MIDI-CC addressable.
+    // Base::AfterAudioLoop applies it after AudioLoop returns, i.e. after Core 1
+    // has finished the block (we WaitForMessage(DONE) before returning), so the
+    // scaling lands on the finished stereo mix.
 
     // LED_1 is the app's FX B state indicator (fx_colors_). Base's stock input
     // loudness meter (INPUT_INDICATION, in BeforeUiLoop) and its red clip flash
@@ -281,11 +291,8 @@ void AppSummoner::Init()
         .initial_value = POT_MAX, // filter open on power-up
     });
 
-    pots_[Pot::VOLUME] = FancyPot::Create({
-        .pot = Hardware::Pot::POT_5,
-        .layer = Hardware::Layer::SHIFT,
-        .initial_value = POT_MAX, // full volume on power-up (set-and-forget)
-    });
+    // No app-owned volume pot: SHIFT+POT_5 is Base's stock main volume again
+    // (Feature::OUTPUT_GAIN, re-enabled 2026-08-14 — see Init).
 
     pots_[Pot::INTERVAL] = FancyPot::Create({
         .pot = Hardware::Pot::POT_2,
@@ -528,8 +535,10 @@ FASTCODE void AppSummoner::SecondCoreProcess(size_t index)
     const q15_t rev_in = static_cast<q15_t>((fx_l + fx_r) >> 1);
     const ShimmerReverb::Output wet = reverb_.Process(rev_in);
     const q15_t dry_gain = static_cast<q15_t>(Q15_MAX - reverb_wet_);
-    const q15_t left = q15_mult(q15_add(q15_mult(fx_l, dry_gain), q15_mult(wet.left, reverb_wet_)), volume_);
-    const q15_t right = q15_mult(q15_add(q15_mult(fx_r, dry_gain), q15_mult(wet.right, reverb_wet_)), volume_);
+    // No app volume multiply here — Base's OUTPUT_GAIN scales the finished
+    // buffer in AfterAudioLoop (2026-08-14).
+    const q15_t left = q15_add(q15_mult(fx_l, dry_gain), q15_mult(wet.left, reverb_wet_));
+    const q15_t right = q15_add(q15_mult(fx_r, dry_gain), q15_mult(wet.right, reverb_wet_));
 
     output_buffer_[2 * index] = left;
     output_buffer_[2 * index + 1] = right;
@@ -805,7 +814,8 @@ void AppSummoner::UiLoop()
     const float root_octaves = std::log2(voice_freq_[0] * glide_ratio / kRootBase);
     Kastle2::hw.SetCvOut(static_cast<int32_t>(root_octaves * static_cast<float>(DAC_1V) + 0.5f));
 
-    volume_ = pot_to_q15(pots_[Pot::VOLUME]->GetValue());
+    // Volume: nothing to do here — Base's stock OUTPUT_GAIN owns SHIFT+POT_5
+    // (digital gain + codec HP volume), applied in Base::AfterAudioLoop.
 
     // LFO TRI amplitude/polarity (BANK+POT_7): the deadzone plateau makes
     // exact center a clean "LFO off at the jack"

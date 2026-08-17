@@ -109,7 +109,9 @@ private:
      */
     enum class Pot
     {
-        VOLUME,       ///< SHIFT+POT_5: output volume (moved from primary 2026-08-13 swap)
+        // No VOLUME slot: SHIFT+POT_5 is Base's stock main volume
+        // (Feature::OUTPUT_GAIN, re-enabled 2026-08-14 — digital gain + codec
+        // HP volume + EEPROM persistence, which the app's own gain lacked).
         PITCH_OFFSET, ///< POT_1 primary: chord root transpose (+-1 octave)
         DECAY,        ///< POT_4 primary: decay / note length
         VOICING,      ///< POT_2 primary: voicing sweep close -> open -> extended
@@ -262,7 +264,6 @@ private:
 
     // Pots
     EnumArray<Pot, std::unique_ptr<FancyPot>> pots_;
-    q15_t volume_ = 0;
 
     /// Signed LFO TRI scale from BANK+POT_7 (pot - POT_HALF, so -2047..+2048):
     /// positive = attenuated triangle, negative = inverted, 0 = flat 0V.
