@@ -118,6 +118,19 @@ public:
     FASTCODE void AfterAudioLoop(q15_t *input, q15_t *output, size_t size);
 
     /**
+     * @brief Pauses/resumes reading of Base's own pots (and the gain features
+     *        that follow from them) in BeforeUiLoop().
+     * @param paused True to pause, false to resume.
+     * @note For apps with a button-combo fourth layer: while the combo is held
+     *       the hardware layer is unchanged, so Base would otherwise keep
+     *       tracking the physical pots the combo has borrowed (e.g. OUTPUT_GAIN
+     *       on SHIFT+POT_5 moving with the combo knob). Paused, the FancyPot
+     *       values are left untouched, so nothing leaks and nothing jumps when
+     *       the combo is released. Default false: stock apps are unaffected.
+     */
+    void SetPotsPaused(bool paused);
+
+    /**
      * Should be called at the start of apps UI loop.
      * Reads all the pots (input gain, output gain, LFO, tempo).
      * Handles switching pot layers.
@@ -335,6 +348,7 @@ private:
     // Layers stuff
     void LayersHandling();
     size_t shift_and_mode_pressed_count_ = 0;
+    bool pots_paused_ = false;
     bool settings_toggled_ = false;
     bool leds_should_be_off_ = false;
     Hardware::Layer prev_layer_ = Hardware::Layer::NORMAL;

@@ -619,6 +619,13 @@ void AppSummoner::ProcessComboLayer()
     }
     combo_.Process(combo_pressed, raw);
 
+    // The combo borrows the physical pots, but the hardware layer stays SHIFT,
+    // so Base would otherwise keep tracking them with its own FancyPots — with
+    // Feature::OUTPUT_GAIN enabled that made SHIFT+BANK+POT_5 (FX B param) move
+    // the main volume (bug, Sam 2026-08-18). Pause Base's pot reads for the
+    // duration of the hold, exactly as the app pauses its own below.
+    Kastle2::base.SetPotsPaused(combo_.IsActive());
+
     if (combo_.IsActive() && combo_.AnyEngaged())
     {
         // Pot movement while both buttons are held cancels the hold's

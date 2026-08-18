@@ -628,6 +628,11 @@ void Base::LayersHandling()
     }
 }
 
+void Base::SetPotsPaused(const bool paused)
+{
+    pots_paused_ = paused;
+}
+
 void Base::BeforeUiLoop()
 {
     if (!IsFeatureEnabled(Feature::BASE))
@@ -636,16 +641,20 @@ void Base::BeforeUiLoop()
         return;
     }
 
-    // Read pot values
-    for (auto &pot : pots_)
+    // Read pot values (skipped while an app has borrowed the physical pots for
+    // a button-combo layer — see SetPotsPaused())
+    if (!pots_paused_)
     {
-        pot->ReadValue();
-    }
-    for (auto pot_type : EnumRange<Hardware::Pot>())
-    {
-        if (midi_pots_enabled_.test(static_cast<size_t>(pot_type)))
+        for (auto &pot : pots_)
         {
-            midi_pots_[pot_type]->ReadValue();
+            pot->ReadValue();
+        }
+        for (auto pot_type : EnumRange<Hardware::Pot>())
+        {
+            if (midi_pots_enabled_.test(static_cast<size_t>(pot_type)))
+            {
+                midi_pots_[pot_type]->ReadValue();
+            }
         }
     }
 
@@ -656,7 +665,7 @@ void Base::BeforeUiLoop()
     // Combining software volume and codec setting
 
     // INPUT
-    if (IsFeatureEnabled(Feature::INPUT_GAIN))
+    if (IsFeatureEnabled(Feature::INPUT_GAIN) && !pots_paused_)
     {
         uint32_t input_pot = pots_[Pot::INPUT]->GetValue();
         Kastle2::codec.SetInputGain(input_pot >> 6); // hw gain
@@ -664,7 +673,7 @@ void Base::BeforeUiLoop()
     }
 
     // OUTPUT
-    if (IsFeatureEnabled(Feature::OUTPUT_GAIN))
+    if (IsFeatureEnabled(Feature::OUTPUT_GAIN) && !pots_paused_)
     {
         uint32_t output_pot = pots_[Pot::OUTPUT]->GetValue();
         if (output_pot < POT_HALF)
