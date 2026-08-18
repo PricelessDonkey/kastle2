@@ -25,7 +25,6 @@ std::vector<int> Semitones(const SummonerScales::Scale s)
 TEST(SummonerScales_TableMatchesDocumentedIntervals)
 {
     using S = SummonerScales::Scale;
-    ASSERT_TRUE(Semitones(S::MINOR_CHORD) == (std::vector<int>{0, 3, 7}));
     ASSERT_TRUE(Semitones(S::MINOR_PENTATONIC) == (std::vector<int>{0, 3, 5, 7, 10}));
     ASSERT_TRUE(Semitones(S::MINOR_DIATONIC) == (std::vector<int>{0, 2, 3, 5, 7, 8, 10}));
     ASSERT_TRUE(Semitones(S::HARMONIC_MINOR) == (std::vector<int>{0, 2, 3, 5, 7, 8, 11}));
@@ -41,7 +40,14 @@ TEST(SummonerScales_NoChromaticNoMajorDiatonic_AndAllDistinct)
     std::set<Quantizer::Scale> seen;
     for (const auto mask : SummonerScales::kTable)
     {
-        ASSERT_TRUE(mask & 1u);                  // every scale contains the root
+        ASSERT_TRUE(mask & 1u); // every scale contains the root
+        // Real scales only: no chords. Every slot has at least 5 tones.
+        int tones = 0;
+        for (int i = 0; i < 12; i++)
+        {
+            tones += (mask >> i) & 1u;
+        }
+        ASSERT_TRUE(tones >= 5);
         ASSERT_TRUE(mask != 0b111111111111u);    // no chromatic
         ASSERT_TRUE(mask != 0b101010110101u);    // no major diatonic
         ASSERT_TRUE(seen.insert(mask).second);   // no duplicate slots
@@ -50,10 +56,11 @@ TEST(SummonerScales_NoChromaticNoMajorDiatonic_AndAllDistinct)
               static_cast<int>(SummonerScales::Scale::COUNT));
 }
 
-TEST(SummonerScales_QuantizerUsesTable_AndPotHalfLandsOnTizitaMajor)
+TEST(SummonerScales_QuantizerUsesTable_AndDefaultPotValueLandsOnTizitaMajor)
 {
-    // The SCALE pot maps POT_HALF over map_size = table size; index 4 is the default.
-    const size_t idx = (2048u * SummonerScales::kTable.size()) / 4096u;
+    // FancyPot's sticky_map: index = value / (4096 / table_size).
+    const size_t step = 4096u / SummonerScales::kTable.size();
+    const size_t idx = static_cast<size_t>(SummonerScales::kDefaultPotValue) / step;
     ASSERT_EQ(static_cast<int>(idx), static_cast<int>(SummonerScales::kDefaultIndex));
 
     Quantizer q;

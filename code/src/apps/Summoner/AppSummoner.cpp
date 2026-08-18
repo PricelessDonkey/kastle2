@@ -306,7 +306,7 @@ void AppSummoner::Init()
     pots_[Pot::SCALE] = FancyPot::Create({
         .pot = Hardware::Pot::POT_1,
         .layer = Hardware::Layer::MODE,
-        .initial_value = POT_HALF, // middle of the scale table = tizita major
+        .initial_value = SummonerScales::kDefaultPotValue, // tizita major
         .map_size = quantizer_.GetScaleTableSize(),
         .memory_addr = kMemScale,
     });
@@ -381,7 +381,7 @@ void AppSummoner::DeInit()
 
 void AppSummoner::MemoryInitialization()
 {
-    Kastle2::memory.Write8(kMemScale, pot_to_mem(POT_HALF));   // tizita major
+    Kastle2::memory.Write8(kMemScale, pot_to_mem(SummonerScales::kDefaultPotValue)); // tizita major
     Kastle2::memory.Write8(kMemStrumDir, pot_to_mem(kDirDefaultValue)); // Up zone
     Kastle2::memory.Write8(kMemFxMode, std::to_underlying(FxB::OFF));
     Kastle2::memory.Write8(kMemWaveform, pot_to_mem(kWaveformDefaultSlotValue)); // saw

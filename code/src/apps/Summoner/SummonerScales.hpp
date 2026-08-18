@@ -41,7 +41,6 @@ namespace SummonerScales
 /// Scale slots in knob order (BANK + POT_1 sweeps left to right).
 enum class Scale : size_t
 {
-    MINOR_CHORD,      ///< 0 3 7
     MINOR_PENTATONIC, ///< 0 3 5 7 10
     MINOR_DIATONIC,   ///< 0 2 3 5 7 8 10 (aeolian)
     HARMONIC_MINOR,   ///< 0 2 3 5 7 8 11
@@ -55,7 +54,6 @@ enum class Scale : size_t
 
 /// The table itself, indexed by Scale. Bit i set = semitone i is in the scale.
 inline constexpr std::array<Quantizer::Scale, static_cast<size_t>(Scale::COUNT)> kTable = {
-    0b000010001001u, ///< MINOR_CHORD      0 3 7
     0b010010101001u, ///< MINOR_PENTATONIC 0 3 5 7 10
     0b010110101101u, ///< MINOR_DIATONIC   0 2 3 5 7 8 10
     0b100110101101u, ///< HARMONIC_MINOR   0 2 3 5 7 8 11
@@ -66,8 +64,14 @@ inline constexpr std::array<Quantizer::Scale, static_cast<size_t>(Scale::COUNT)>
     0b000101100011u, ///< ANCHIHOYE        0 1 5 6 8
 };
 
-/// Index the SCALE pot's POT_HALF default lands on (see AppSummoner::MemoryInitialization).
+/// Power-on scale (see AppSummoner::MemoryInitialization).
 inline constexpr size_t kDefaultIndex = static_cast<size_t>(Scale::TIZITA_MAJOR);
+
+/// Pot value that maps to kDefaultIndex: the centre of that slot's band.
+/// FancyPot's sticky_map divides 0..POT_MAX into kTable.size() equal steps, so
+/// POT_HALF only lands on the default by coincidence — centre it explicitly.
+inline constexpr int32_t kDefaultPotValue =
+    static_cast<int32_t>((2 * kDefaultIndex + 1) * 4096 / (2 * kTable.size()));
 
 /// Convenience for tests/readers: the semitone set of a slot as a bitmask.
 inline constexpr Quantizer::Scale Mask(const Scale scale)
