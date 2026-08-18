@@ -108,10 +108,20 @@ static constexpr std::array<uint8_t, 4> kDividersMultipliers = {1, 2, 4, 8}; ///
 
 /**
  * @brief Potentiometer mapping for internal tempo.
+ * @note Narrowed 2026-08-18 for Summoner (Sam: the knob was far too touchy).
+ *       Stock was 0.1-60 Hz with breakpoints at pot 0/0.125/0.5/0.87/1.0 -
+ *       a 600:1 span whose whole musical region (~1-8 steps/sec) lived in the
+ *       first eighth of the travel, so a hair of knob movement jumped several
+ *       "BPM" and everything above the halfway point was an unusable blur.
+ *       Now 0.5-20 Hz on evenly spaced breakpoints, each roughly 2.2-3x the
+ *       last, so the rate rises smoothly across the full sweep: one chord
+ *       every two seconds at the far left, fast ratchets at the far right.
+ *       Tap tempo is unaffected (it sets ticks directly, bounded by
+ *       kTapTempoMinTicks/kTapTempoMaxTicks) and so is external/MIDI sync.
  */
 static constexpr auto kTempoMap = MapDef<int32_t, 5>{
-    {pot(0.0f), pot(0.125f), pot(0.5f), pot(0.87f), pot(1.0f)},
-    {hz2alr(0.1f), hz2alr(3.0f), hz2alr(6.0f), hz2alr(14.0f), hz2alr(60.0f)}};
+    {pot(0.0f), pot(0.25f), pot(0.5f), pot(0.75f), pot(1.0f)},
+    {hz2alr(0.5f), hz2alr(1.5f), hz2alr(4.0f), hz2alr(9.0f), hz2alr(20.0f)}};
 
 /**
  * @brief Potentiometer mapping for external MIDI tempo.
