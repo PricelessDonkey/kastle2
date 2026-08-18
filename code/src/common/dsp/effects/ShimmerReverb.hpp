@@ -30,8 +30,9 @@ namespace kastle2
  *
  * @note Single mono pitch shifter (fed by the summed tank feedback) for now;
  *       the stereo-shifter question in REVERB.md stays open.
- * @note Granular-extremes behaviour (top of shimmer range) is a later task —
- *       this is the fixed ~60ms-grain baseline.
+ * @note Granular-extremes behaviour (top of shimmer range) is opt-in via
+ *       @ref SetExtremeEnabled and off by default (2026-08-18) — the default
+ *       is the fixed ~60ms-grain baseline.
  */
 class ShimmerReverb
 {
@@ -91,6 +92,18 @@ public:
 
     /** @brief Set the shimmer pitch-shift interval. */
     void SetInterval(Interval interval);
+
+    /**
+     * @brief Enable/disable the granular extremes at the top of the shimmer range.
+     * @param enabled true = grain shrink + jitter ramp in above 80% shimmer;
+     *                false (the default) = fixed ~60ms grain at every shimmer
+     *                amount, bit-identical to the plain shifter.
+     *
+     * Off by default since 2026-08-18: Summoner's shimmer knob is a plain
+     * 0->full ramp with no chattering zone (CHORD-GEN Phase 12). Berserker
+     * still wants the extremes, so the behaviour is opt-in rather than deleted.
+     */
+    void SetExtremeEnabled(bool enabled) { extreme_enabled_ = enabled; }
 
     /** @brief Diagnostic (tests): total granular grain wraps since Init/Reset. */
     uint32_t DebugGrainWraps() const { return pitch_.wraps_; }
@@ -191,7 +204,8 @@ private:
      * the (effective) grain window and crossfade with complementary triangular
      * windows (unity sum, no click at wrap).
      *
-     * Granular extremes (REVERB.md): @ref SetExtreme drives, with a single
+     * Granular extremes (REVERB.md, off unless @ref ShimmerReverb::SetExtremeEnabled
+     * turns them on): @ref SetExtreme drives, with a single
      * "extreme" amount, (a) the effective grain window shrinking from ~60ms
      * toward ~16ms — the read modulus drops, the buffer is never reallocated —
      * and (b) per-grain-wrap jitter on the read-start position and the pitch
@@ -368,9 +382,11 @@ private:
     static constexpr q15_t kTankDiffB = q15(0.5f);
     static constexpr float kModRateHz = 0.5f;
 
-    // Granular extremes ramp in only across the top of the shimmer range:
+    // Granular extremes ramp in only across the top of the shimmer range, and
+    // only when explicitly enabled (off by default, 2026-08-18):
     // shimmer <= kExtremeStart is bit-identical to the plain shifter.
     static constexpr q15_t kExtremeStart = q15(0.8f);
+    bool extreme_enabled_ = false;
 };
 
 } // namespace kastle2

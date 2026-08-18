@@ -131,12 +131,13 @@ namespace
 {
 // Runs a steady noise-ish excitation and returns the total grain-wrap count —
 // a direct proxy for grain length (shorter grain → more wraps per second).
-uint32_t GrainWrapsAtShimmer(q15_t shimmer)
+uint32_t GrainWrapsAtShimmer(q15_t shimmer, bool extremes = true)
 {
     ShimmerReverb rev;
     rev.Init(kSampleRate);
     rev.SetDecay(0.9f);
     rev.SetInterval(ShimmerReverb::Interval::OCTAVE_UP);
+    rev.SetExtremeEnabled(extremes);
     rev.SetShimmer(shimmer);
     for (int n = 0; n < 44000; ++n)
     {
@@ -157,6 +158,16 @@ TEST(ShimmerReverb_GranularExtremeShrinksGrainAtTopOfRange)
     uint32_t wraps_top = GrainWrapsAtShimmer(Q15_MAX);    // shortest grain
 
     ASSERT_TRUE(wraps_top > wraps_full * 2);
+}
+
+TEST(ShimmerReverb_ExtremesOffByDefaultKeepsFixedGrain)
+{
+    // Default (2026-08-18, CHORD-GEN Phase 12): extremes are opt-in, so a full
+    // shimmer knob runs the same fixed ~60ms grain as the mid-range — no
+    // chattering zone. Bit-identical wrap count to the pre-extremes baseline.
+    uint32_t wraps_mid = GrainWrapsAtShimmer(q15(0.5f), false);
+    uint32_t wraps_top = GrainWrapsAtShimmer(Q15_MAX, false);
+    ASSERT_EQ(wraps_top, wraps_mid);
 }
 
 TEST(ShimmerReverb_BelowThresholdGrainIsUnchanged)

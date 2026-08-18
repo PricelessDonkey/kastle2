@@ -141,9 +141,11 @@ FASTCODE ShimmerReverb::Output ShimmerReverb::Process(q15_t input)
 
     // Shimmer: one mono pitch shifter on the summed feedback; blend the shifted
     // signal into each half's feedback by the shimmer amount.
-    // Granular extremes: ramp the grain shrink + jitter in across the top of
-    // the shimmer range (bit-identical below kExtremeStart).
-    q15_t extreme = shimmer_ > kExtremeStart ? q15_saturate((shimmer_ - kExtremeStart) * 5) : 0;
+    // Granular extremes (opt-in, off by default): ramp the grain shrink + jitter
+    // in across the top of the shimmer range (bit-identical below kExtremeStart).
+    q15_t extreme = (extreme_enabled_ && shimmer_ > kExtremeStart)
+                        ? q15_saturate((shimmer_ - kExtremeStart) * 5)
+                        : 0;
     pitch_.SetExtreme(extreme);
 
     q15_t shimmer_in = (fb_l_raw + fb_r_raw) >> 1;
