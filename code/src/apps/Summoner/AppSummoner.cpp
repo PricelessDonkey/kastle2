@@ -600,12 +600,18 @@ void AppSummoner::FireChord()
 
     // Strum: direction from POT_3 summed with LFO MOD CV (PARAM_2) — 6 zones,
     // with the broken-chord skip fraying in at the range's two hard ends;
-    // speed from SHIFT+POT_3, knob-only (2026-08-12 swap), stepped through
-    // ratios of the measured clock step so the cascade keeps its rhythmic
-    // meaning at any tempo (tempo-synced 2026-08-18, was an absolute 0->300ms
-    // curve). Same single step-period measurement the tremolo gate reads.
-    const int32_t strum_frames = SummonerStrumSync::FramesFromQ15(
-        pot_to_q15(pots_[Pot::STRUM_SPEED]->GetValue()), groove_.GetPeriodFrames());
+    // speed from SHIFT+POT_3 summed with the FREE jack (PITCH_1), stepped
+    // through ratios of the measured clock step so the cascade keeps its
+    // rhythmic meaning at any tempo (tempo-synced 2026-08-18, was an absolute
+    // 0->300ms curve). Same single step-period measurement the tremolo gate
+    // reads. The knob sets the floor and the CV sweeps upward from it: PITCH_1
+    // is unipolar 0-5V on Kastle 2, i.e. 0..ADC_5V == 0..POT_MAX, so it sums in
+    // pot units directly like PARAM_1/PARAM_2 do elsewhere. Sampled here at
+    // fire time only — a strum's spacing is fixed once the chord is scheduled.
+    const int32_t strum_val = pots_[Pot::STRUM_SPEED]->GetValue() +
+                              Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PITCH_1);
+    const int32_t strum_frames =
+        SummonerStrumSync::FramesFromQ15(pot_to_q15(strum_val), groove_.GetPeriodFrames());
     const q15_t dir_val = pot_to_q15(pots_[Pot::STRUM_DIR]->GetValue() +
                                      Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PARAM_2));
     strum_.Fire(strum_frames, SummonerStrum::DirectionFromQ15(dir_val), humanize_,
