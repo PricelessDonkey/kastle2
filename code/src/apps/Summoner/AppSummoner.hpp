@@ -117,7 +117,7 @@ private:
         VOICING,      ///< POT_2 primary: voicing sweep close -> open -> extended
         STRUM_DIR,    ///< POT_3 primary: strum direction, 6 zones + PARAM_2 CV (swapped with speed 2026-08-12)
         QUALITY,      ///< POT_6 primary: chord quality zones (major ... dim)
-        TREMOLO,      ///< SHIFT+POT_1: tempo-synced tremolo rate, folded at 50% (replaced portamento 2026-08-16)
+        TREMOLO,      ///< SHIFT+POT_2: tempo-synced tremolo rate, folded at 50% (replaced portamento 2026-08-16; moved off POT_1 2026-08-18 so Base's input gain gets it back)
         STRUM_SPEED,  ///< SHIFT+POT_3: strum speed, 0 = block chord, max = slow arpeggio (knob-only)
         LENGTH_ATTEN, ///< SHIFT+POT_4: LENGTH MOD CV attenuation
         CUTOFF,       ///< SHIFT+POT_6: filter cutoff
@@ -129,7 +129,6 @@ private:
         LFO_AMOUNT,   ///< BANK+POT_7: LFO TRI jack amplitude/polarity (attenuverter, center = flat 0V)
         REVERB_BLEND, ///< POT_5 primary: reverb combo — dry->wet then decay short->long (SummonerReverbBlend; moved to primary 2026-08-13 swap)
         SHIMMER,      ///< BANK+POT_5: shimmer amount (clean plate -> infinite shimmer, granular extreme at top)
-        INTERVAL,     ///< SHIFT+POT_2: shimmer pitch interval (octave-down / fifth / octave / two-octave)
         COUNT
     };
 

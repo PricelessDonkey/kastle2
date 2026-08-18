@@ -154,10 +154,12 @@ void AppSummoner::Init()
     // POT_7's alone; Base's LFO itself is still used (GetLfoTriangle/GetLfo).
     Kastle2::base.SetFeatureEnabled(Base::Feature::LFO_MOD, false);
 
-    // Base's stock INPUT_GAIN reads SHIFT+POT_1, which this app repurposes for
-    // the tremolo rate (portamento until 2026-08-16) — disable it either way,
-    // it would scale the input path off a knob that means something else here.
-    Kastle2::base.SetFeatureEnabled(Base::Feature::INPUT_GAIN, false);
+    // INPUT_GAIN (stock external-audio level on SHIFT+POT_1) is *kept enabled*
+    // as of 2026-08-18, same reasoning as OUTPUT_GAIN below: the app no longer
+    // claims that knob (portamento retired 2026-08-16, tremolo moved to
+    // SHIFT+POT_2 2026-08-18), and Base drives the codec input gain as well as
+    // the digital one, is EEPROM-persisted (ADDR_INPUT_GAIN) and MIDI-CC
+    // addressable. Deliberately left to Base — nothing to write here.
 
     // OUTPUT_GAIN (stock main volume) is *kept enabled* as of 2026-08-14. It was
     // disabled in 7bfbd6f because the reverb blend then lived on SHIFT+POT_5 and
@@ -200,8 +202,13 @@ void AppSummoner::Init()
     filter_.SetResonance(0.1f);
 
     // ShimmerReverb runs on Core 1 with the clipper/filter (Phase 7). Init sets
-    // musical defaults (decay 0.85, shimmer 0, fifth-up); UiLoop drives them.
+    // musical defaults (decay 0.85, shimmer 0); UiLoop drives decay and shimmer.
     reverb_.Init(SAMPLE_RATE);
+
+    // Fixed +1 octave shimmer: the SHIFT+POT_2 interval control was retired
+    // 2026-08-18 (Phase 12) to free the slot for the tremolo rate. Octave-up is
+    // the classic shimmer sound; the previous power-on default was FIFTH_UP.
+    reverb_.SetInterval(ShimmerReverb::Interval::OCTAVE_UP);
 
     // FX B (Phase 8): heap-allocated delay line (capped at kFxDelayMax) + a
     // header-only crusher, both sit pre-reverb on Core 1. The delay runs fully
@@ -272,7 +279,7 @@ void AppSummoner::Init()
     // No map_size: SummonerTremolo quantizes the knob itself (as
     // SummonerNoiseFold does), so the FancyPot stays continuous.
     pots_[Pot::TREMOLO] = FancyPot::Create({
-        .pot = Hardware::Pot::POT_1,
+        .pot = Hardware::Pot::POT_2,
         .layer = Hardware::Layer::SHIFT,
         .initial_value = POT_MIN, // tremolo OFF on power-up
     });
@@ -297,13 +304,6 @@ void AppSummoner::Init()
 
     // No app-owned volume pot: SHIFT+POT_5 is Base's stock main volume again
     // (Feature::OUTPUT_GAIN, re-enabled 2026-08-14 — see Init).
-
-    pots_[Pot::INTERVAL] = FancyPot::Create({
-        .pot = Hardware::Pot::POT_2,
-        .layer = Hardware::Layer::SHIFT,
-        .initial_value = POT_MIN, // fifth-up is the second zone; see UiLoop map
-        .map_size = static_cast<uint32_t>(ShimmerReverb::Interval::COUNT),
-    });
 
     // Mode (BANK) layer
     pots_[Pot::SCALE] = FancyPot::Create({
@@ -820,7 +820,7 @@ void AppSummoner::UiLoop()
         oscs_[v].SetFrequency(fmin(voice_freq_[v] * detune_mult_[v], kMaxPitchHz));
     }
 
-    // Tremolo (SHIFT+POT_1): the knob quantizes to a ratio of the clock step
+    // Tremolo (SHIFT+POT_2): the knob quantizes to a ratio of the clock step
     // period, which Groove already measures — one source of truth. Set here at
     // UiLoop rate, never in the audio loop (the divide stays out of it).
     const SummonerTremolo::Setting trem =
@@ -884,16 +884,14 @@ void AppSummoner::UiLoop()
     // ShimmerReverb (Core 1): POT_5 primary is the dry↔wet + decay combo knob
     // (SummonerReverbBlend — 0 = fully dry, 50% = short/very-wet, 100% = long/
     // very-wet; moved to primary in the 2026-08-13 swap, volume now SHIFT+POT_5);
-    // shimmer amount BANK+POT_5 (top crosses into the granular-extreme
-    // cloud internally); interval SHIFT+POT_2 stepped over the 4 pitch zones. Set
+    // shimmer amount BANK+POT_5, a plain 0→full ramp at a fixed +1 octave
+    // (interval control and granular extremes both retired 2026-08-18). Set
     // here at UiLoop rate while Core 1 is idle between blocks — no cross-core race.
     const SummonerReverbBlend::Result blend =
         SummonerReverbBlend::Compute(pot_to_q15(pots_[Pot::REVERB_BLEND]->GetValue()));
     reverb_.SetDecay(blend.decay);
     reverb_wet_ = blend.wet;
     reverb_.SetShimmer(pot_to_q15(pots_[Pot::SHIMMER]->GetValue()));
-    const int32_t interval_zone = pots_[Pot::INTERVAL]->GetMappedValue();
-    reverb_.SetInterval(static_cast<ShimmerReverb::Interval>(interval_zone >= 0 ? interval_zone : 0));
 
     // FX B params (SHIFT+BANK fourth layer): the parameter knob (POT_5) follows
     // the selected effect — delay time in DELAY/BOTH, crush rate+depth in CRUSH;
