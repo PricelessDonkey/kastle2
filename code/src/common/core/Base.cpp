@@ -703,7 +703,12 @@ void Base::BeforeUiLoop()
     clock_.SetPot(tempo_pot);
 
     // LFO
-    int32_t lfo_mod = pots_[Pot::LFO_MOD]->GetValue() - POT_HALF;
+    // Depth of the PARAM_2 (LFO MOD CV) modulation of the LFO rate. Apps that
+    // repurpose POT_3 and/or PARAM_2 disable Feature::LFO_MOD, which pins the
+    // depth at zero so neither the knob nor the CV reaches the LFO.
+    int32_t lfo_mod = IsFeatureEnabled(Feature::LFO_MOD)
+                          ? pots_[Pot::LFO_MOD]->GetValue() - POT_HALF
+                          : 0;
     int32_t lfo_pot = pots_[Pot::LFO]->GetValue();
 
     // Allowing a little bit of hysteresis

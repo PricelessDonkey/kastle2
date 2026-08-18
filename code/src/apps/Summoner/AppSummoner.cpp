@@ -146,6 +146,14 @@ void AppSummoner::Init()
     Kastle2::base.SetFeatureEnabled(Base::Feature::GATE_OUT, false);
     Kastle2::base.SetFeatureEnabled(Base::Feature::LFO_OUT, false);
 
+    // Base's stock LFO-rate modulation reads POT_3 (primary) for depth and
+    // PARAM_2 for the CV — both repurposed here (strum direction, knob summed
+    // with the same jack per CHORD-GEN.md's CV table). Left enabled, setting a
+    // strum direction also dialled in LFO-rate modulation, and the direction CV
+    // wobbled the TRI/PULSE jacks (leak audit, 2026-08-18). The LFO rate stays
+    // POT_7's alone; Base's LFO itself is still used (GetLfoTriangle/GetLfo).
+    Kastle2::base.SetFeatureEnabled(Base::Feature::LFO_MOD, false);
+
     // Base's stock INPUT_GAIN reads SHIFT+POT_1, which this app repurposes for
     // the tremolo rate (portamento until 2026-08-16) — disable it either way,
     // it would scale the input path off a knob that means something else here.

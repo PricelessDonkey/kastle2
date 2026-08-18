@@ -77,6 +77,7 @@ public:
         AUDIO_CHAIN,           ///< Audio chain (input -> output), disable in processing the audio by yourself.
         MIDI_CLOCK,            ///< MIDI input clock handling.
         GATE_INDICATION,       ///< Gate indication on the top right LED.
+        LFO_MOD,               ///< LFO rate modulation from LFO MOD CV (PARAM_2), depth from POT_3.
         COUNT
     };
 
