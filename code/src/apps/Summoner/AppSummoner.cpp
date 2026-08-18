@@ -225,7 +225,11 @@ void AppSummoner::Init()
 
     quantizer_.Init(0.8f);
     quantizer_.SetEnabled(true);
-    quantizer_.SetScale(Quantizer::DefaultScale::CHROMATIC);
+    // Summoner's own table (minor / pentatonic / Ethiopian qignit) replaces the
+    // stock default scales — no chromatic, no major diatonic. Must be installed
+    // before the SCALE pot is created: its map_size reads GetScaleTableSize().
+    quantizer_.SetScaleTable(SummonerScales::kTable);
+    quantizer_.SetScale(SummonerScales::kDefaultIndex);
 
     // Normal layer
     // POT_5 primary is the reverb combo (Phase 10 swap 2026-08-13): the dry/wet
@@ -302,7 +306,7 @@ void AppSummoner::Init()
     pots_[Pot::SCALE] = FancyPot::Create({
         .pot = Hardware::Pot::POT_1,
         .layer = Hardware::Layer::MODE,
-        .initial_value = POT_HALF, // middle of the scale table = chromatic
+        .initial_value = POT_HALF, // middle of the scale table = tizita major
         .map_size = quantizer_.GetScaleTableSize(),
         .memory_addr = kMemScale,
     });
@@ -377,7 +381,7 @@ void AppSummoner::DeInit()
 
 void AppSummoner::MemoryInitialization()
 {
-    Kastle2::memory.Write8(kMemScale, pot_to_mem(POT_HALF));   // chromatic
+    Kastle2::memory.Write8(kMemScale, pot_to_mem(POT_HALF));   // tizita major
     Kastle2::memory.Write8(kMemStrumDir, pot_to_mem(kDirDefaultValue)); // Up zone
     Kastle2::memory.Write8(kMemFxMode, std::to_underlying(FxB::OFF));
     Kastle2::memory.Write8(kMemWaveform, pot_to_mem(kWaveformDefaultSlotValue)); // saw

@@ -28,6 +28,7 @@
 #include "SummonerGroove.hpp"
 #include "SummonerLfoShape.hpp"
 #include "SummonerReverbBlend.hpp"
+#include "SummonerScales.hpp"
 #include "SummonerTremolo.hpp"
 #include "SummonerStrum.hpp"
 #include "SummonerStrumSync.hpp"

@@ -66,6 +66,7 @@ set(TEST_SOURCES
     dsp/test_summoner_noise_fold.cpp
     dsp/test_summoner_strum_sync.cpp
     dsp/test_summoner_tremolo.cpp
+    dsp/test_summoner_scales.cpp
     dsp/test_summoner_sequencer.cpp
     dsp/test_summoner_strum.cpp
     dsp/test_summoner_timbre.cpp
