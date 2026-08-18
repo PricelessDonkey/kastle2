@@ -31,13 +31,6 @@ constexpr uint32_t kLfoShapeSeed = 0x1F0BEA71;
 // Pitch offset (POT_1) range: +-1 octave around center
 constexpr float kPitchOffsetOctaves = 1.0f;
 
-// Strum speed (SHIFT+POT_3, knob-only since the 2026-08-12 direction/speed
-// swap): frames between adjacent voices, 0 -> 300ms at 44kHz
-// (per the CHORD-GEN.md strum table: 0 / ~8ms / ~30ms / ~80ms / ~300ms)
-constexpr auto kMapStrum = MapDef<int32_t, 5>{
-    {pot(0.0f), pot(0.25f), pot(0.5f), pot(0.75f), pot(1.0f)},
-    {0, 352, 1320, 3520, SummonerStrum::kMaxStrumFrames}};
-
 // Strum direction (POT_3 + PARAM_2 CV) power-on/memory default: middle of the
 // Up zone — clean of the 0-3% broken-chord fray at the hard stop
 constexpr int32_t kDirDefaultValue = pot(0.08f);
@@ -607,8 +600,12 @@ void AppSummoner::FireChord()
 
     // Strum: direction from POT_3 summed with LFO MOD CV (PARAM_2) — 6 zones,
     // with the broken-chord skip fraying in at the range's two hard ends;
-    // speed from SHIFT+POT_3, knob-only (2026-08-12 swap)
-    const int32_t strum_frames = curve_map(pots_[Pot::STRUM_SPEED]->GetValue(), kMapStrum, MapClamp::TRUE);
+    // speed from SHIFT+POT_3, knob-only (2026-08-12 swap), stepped through
+    // ratios of the measured clock step so the cascade keeps its rhythmic
+    // meaning at any tempo (tempo-synced 2026-08-18, was an absolute 0->300ms
+    // curve). Same single step-period measurement the tremolo gate reads.
+    const int32_t strum_frames = SummonerStrumSync::FramesFromQ15(
+        pot_to_q15(pots_[Pot::STRUM_SPEED]->GetValue()), groove_.GetPeriodFrames());
     const q15_t dir_val = pot_to_q15(pots_[Pot::STRUM_DIR]->GetValue() +
                                      Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PARAM_2));
     strum_.Fire(strum_frames, SummonerStrum::DirectionFromQ15(dir_val), humanize_,

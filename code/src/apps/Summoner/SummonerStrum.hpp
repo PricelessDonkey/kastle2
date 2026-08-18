@@ -33,8 +33,15 @@ public:
     /** @brief Number of chord voices. */
     static constexpr size_t kNumVoices = 4;
 
-    /** @brief Maximum strum delay between adjacent voices: 300ms at 44kHz. */
-    static constexpr int32_t kMaxStrumFrames = 13200;
+    /**
+     * @brief Maximum strum delay between adjacent voices: 1s at 44kHz.
+     *
+     * Raised from 300ms on 2026-08-18 when the speed knob became tempo-synced
+     * (@ref SummonerStrumSync): the top entry is half a clock step, which at the
+     * slowest internal tempo (0.5 Hz, a 2s step) is a full second. The clamp is
+     * now only a safety net against an absurdly slow external SYNC clock.
+     */
+    static constexpr int32_t kMaxStrumFrames = 44100;
 
     /** @brief Maximum humanize jitter: +-25ms at 44kHz. */
     static constexpr int32_t kMaxHumanizeFrames = 1100;

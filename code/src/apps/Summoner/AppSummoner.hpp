@@ -30,6 +30,7 @@
 #include "SummonerReverbBlend.hpp"
 #include "SummonerTremolo.hpp"
 #include "SummonerStrum.hpp"
+#include "SummonerStrumSync.hpp"
 #include "SummonerVoiceEnv.hpp"
 
 namespace kastle2
