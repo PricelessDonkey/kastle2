@@ -336,10 +336,13 @@ FASTCODE void Base::BeforeAudioLoop(q15_t *input, size_t size)
     clock_.SetSyncJackPlugged(sync_enabled && Kastle2::hw.IsSyncInJackProbablyPlugged());
     bool sync_in = sync_enabled && Kastle2::hw.GetSyncIn();
 
-    // Reset sequencer?
+    // Reset sequencer? Apps that repurpose PATTERN R as a plain analog CV
+    // disable Feature::PATTERN_RESET — the edge detector is still clocked so it
+    // cannot fire a stale edge when the feature is turned back on.
     bool do_cv_update = false;
     Hardware::FeedValue feed2 = Kastle2::hw.GetFeedValue(Hardware::AnalogInput::FEED_2);
-    if (sequencer_edge_detector_.Process(feed2 == Hardware::FeedValue::HIGH))
+    if (sequencer_edge_detector_.Process(feed2 == Hardware::FeedValue::HIGH) &&
+        IsFeatureEnabled(Feature::PATTERN_RESET))
     {
         clock_.NextCycleReset();
         sequencer_.Reset();

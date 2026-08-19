@@ -78,6 +78,7 @@ public:
         MIDI_CLOCK,            ///< MIDI input clock handling.
         GATE_INDICATION,       ///< Gate indication on the top right LED.
         LFO_MOD,               ///< LFO rate modulation from LFO MOD CV (PARAM_2), depth from POT_3.
+        PATTERN_RESET,         ///< Clock/sequencer reset from a rising edge on PATTERN R (FEED_2).
         COUNT
     };
 

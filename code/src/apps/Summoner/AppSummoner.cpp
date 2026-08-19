@@ -135,6 +135,13 @@ void AppSummoner::Init()
     Kastle2::base.SetFeatureEnabled(Base::Feature::GATE_OUT, false);
     Kastle2::base.SetFeatureEnabled(Base::Feature::LFO_OUT, false);
 
+    // PATTERN R (FEED_2) is Summoner's strum-speed CV as of Phase 14, but Base
+    // *also* resets its clock and sequencer on a rising edge there — so a gate
+    // or a rising CV into that jack still re-phased the pattern after the app's
+    // own reset was deleted (Sam, 2026-08-19). New upstream gate, same shape as
+    // LFO_MOD; disabled here, left on for every stock app.
+    Kastle2::base.SetFeatureEnabled(Base::Feature::PATTERN_RESET, false);
+
     // Base::Feature::LFO_MOD is *kept enabled* as of 2026-08-18 (Phase 14). It
     // was disabled in 0dbc655 while POT_3/PARAM_2 carried strum direction; now
     // that the LFO MOD row means what the panel says — depth on POT_3, CV on
