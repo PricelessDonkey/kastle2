@@ -31,17 +31,13 @@ constexpr uint32_t kLfoShapeSeed = 0x1F0BEA71;
 // Pitch offset (POT_1) range: +-1 octave around center
 constexpr float kPitchOffsetOctaves = 1.0f;
 
-// Strum direction (POT_3 + PARAM_2 CV) power-on/memory default: middle of the
+// Strum direction (BANK+POT_3 + FREE/PITCH_1 CV) power-on/memory default: middle of the
 // Up zone — clean of the 0-3% broken-chord fray at the hard stop
 constexpr int32_t kDirDefaultValue = pot(0.08f);
 
 // A BANK press only cycles FX B when released within this time (and with no
 // knob turn) — same gesture timing as the stock apps' bank/mode buttons
 constexpr uint32_t kModeShortPressUnder = s2alr(1.5f);
-
-// PARAM_1 movement that releases the PATTERN R voicing snap (~2% of range,
-// safely above unconnected-jack ADC noise)
-constexpr int32_t kVoicingSnapCvRelease = pot(0.02f);
 
 // Detune spread (SHIFT+BANK+POT_1): max per-voice offset in cents — modest so
 // it reads as thickness, not out-of-tune (CHORD-GEN.md Voices)
@@ -139,13 +135,11 @@ void AppSummoner::Init()
     Kastle2::base.SetFeatureEnabled(Base::Feature::GATE_OUT, false);
     Kastle2::base.SetFeatureEnabled(Base::Feature::LFO_OUT, false);
 
-    // Base's stock LFO-rate modulation reads POT_3 (primary) for depth and
-    // PARAM_2 for the CV — both repurposed here (strum direction, knob summed
-    // with the same jack per CHORD-GEN.md's CV table). Left enabled, setting a
-    // strum direction also dialled in LFO-rate modulation, and the direction CV
-    // wobbled the TRI/PULSE jacks (leak audit, 2026-08-18). The LFO rate stays
-    // POT_7's alone; Base's LFO itself is still used (GetLfoTriangle/GetLfo).
-    Kastle2::base.SetFeatureEnabled(Base::Feature::LFO_MOD, false);
+    // Base::Feature::LFO_MOD is *kept enabled* as of 2026-08-18 (Phase 14). It
+    // was disabled in 0dbc655 while POT_3/PARAM_2 carried strum direction; now
+    // that the LFO MOD row means what the panel says — depth on POT_3, CV on
+    // PARAM_2 — Base's stock rate modulation is exactly the wanted behavior.
+    // The upstream feature flag stays for Berserker; Summoner just leaves it on.
 
     // INPUT_GAIN (stock external-audio level on SHIFT+POT_1) is *kept enabled*
     // as of 2026-08-18, same reasoning as OUTPUT_GAIN below: the app no longer
@@ -261,7 +255,7 @@ void AppSummoner::Init()
 
     pots_[Pot::STRUM_DIR] = FancyPot::Create({
         .pot = Hardware::Pot::POT_3,
-        .layer = Hardware::Layer::NORMAL,
+        .layer = Hardware::Layer::MODE, // moved off the primary layer 2026-08-18 (Phase 14)
         .initial_value = kDirDefaultValue, // Up zone (memory overrides if set)
         .memory_addr = kMemStrumDir,
     });
@@ -312,7 +306,7 @@ void AppSummoner::Init()
     });
 
     pots_[Pot::DENSITY] = FancyPot::Create({
-        .pot = Hardware::Pot::POT_3,
+        .pot = Hardware::Pot::POT_7, // was BANK+POT_3 until 2026-08-18 (Phase 14)
         .layer = Hardware::Layer::MODE,
         .initial_value = POT_MAX, // power-on default = K: a chord on every tick
     });
@@ -342,9 +336,13 @@ void AppSummoner::Init()
         .initial_value = POT_MIN, // clean plate on power-up
     });
 
+    // LFO MOD depth: the TRI-jack attenuverter shares POT_3's primary position
+    // with Base's stock LFO-rate modulation depth (Phase 14, 2026-08-18 — it
+    // lived on BANK+POT_7 before). Both are "how much LFO modulation", which is
+    // what the panel row is called.
     pots_[Pot::LFO_AMOUNT] = FancyPot::Create({
-        .pot = Hardware::Pot::POT_7,
-        .layer = Hardware::Layer::MODE,
+        .pot = Hardware::Pot::POT_3,
+        .layer = Hardware::Layer::NORMAL,
         .initial_value = POT_MAX, // full positive = stock TRI behavior
         .deadzone = true,         // exact center = LFO off at the jack
     });
@@ -594,30 +592,35 @@ void AppSummoner::FireChord()
     const auto quality = SummonerChords::QualityFromQ15(pot_to_q15(quality_val));
 
     // Voicing: POT_2 summed with SAMPLE MOD CV (PARAM_1), continuous
-    // close -> open -> extended; the PATTERN R snap forces 0% until movement
+    // close -> open -> extended
     const int32_t voicing_val = constrain(pots_[Pot::VOICING]->GetValue() +
                                               Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PARAM_1),
                                           POT_MIN, POT_MAX);
-    const float voicing = voicing_snap_ ? 0.0f : static_cast<float>(voicing_val) / static_cast<float>(POT_MAX);
+    const float voicing = static_cast<float>(voicing_val) / static_cast<float>(POT_MAX);
 
     SummonerChords::ComputeChord(root, quality, voicing, quantizer_, voice_freq_);
 
-    // Strum: direction from POT_3 summed with LFO MOD CV (PARAM_2) — 6 zones,
+    // Strum: direction from BANK+POT_3 summed with the FREE jack (PITCH_1) — 6 zones,
     // with the broken-chord skip fraying in at the range's two hard ends;
-    // speed from SHIFT+POT_3 summed with the FREE jack (PITCH_1), stepped
+    // speed from SHIFT+POT_3 summed with PATTERN R (FEED_2), stepped
     // through ratios of the measured clock step so the cascade keeps its
     // rhythmic meaning at any tempo (tempo-synced 2026-08-18, was an absolute
     // 0->300ms curve). Same single step-period measurement the tremolo gate
-    // reads. The knob sets the floor and the CV sweeps upward from it: PITCH_1
-    // is unipolar 0-5V on Kastle 2, i.e. 0..ADC_5V == 0..POT_MAX, so it sums in
-    // pot units directly like PARAM_1/PARAM_2 do elsewhere. Sampled here at
-    // fire time only — a strum's spacing is fixed once the chord is scheduled.
-    const int32_t strum_val = pots_[Pot::STRUM_SPEED]->GetValue() +
-                              Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PITCH_1);
+    // reads. The knob sets the floor and the CV sweeps upward from it; FEED_2
+    // is a tri-state jack, so it goes through the same HIGH-threshold dead band
+    // FEED_3's density CV uses — unconnected and 0V both add nothing. The
+    // direction CV is the FREE jack (PITCH_1), unipolar 0-5V, i.e.
+    // 0..ADC_5V == 0..POT_MAX, summing in pot units directly like PARAM_1 does,
+    // so an LFO into it reaches all six zones. (Both jacks rewired 2026-08-18,
+    // Phase 14: PARAM_2 went back to Base's LFO MOD.) Sampled here at fire time
+    // only — a strum's spacing is fixed once the chord is scheduled.
+    const int32_t strum_val =
+        pots_[Pot::STRUM_SPEED]->GetValue() +
+        SummonerSequencer::FeedCvToPot(Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::FEED_2));
     const int32_t strum_frames =
         SummonerStrumSync::FramesFromQ15(pot_to_q15(strum_val), groove_.GetPeriodFrames());
     const q15_t dir_val = pot_to_q15(pots_[Pot::STRUM_DIR]->GetValue() +
-                                     Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PARAM_2));
+                                     Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PITCH_1));
     strum_.Fire(strum_frames, SummonerStrum::DirectionFromQ15(dir_val), humanize_,
                 SummonerStrum::SkipChanceFromQ15(dir_val));
 }
@@ -733,24 +736,15 @@ void AppSummoner::ApplyComboSlots(const bool force)
 
 void AppSummoner::UiLoop()
 {
-    // PATTERN R (FEED_2) rising edge: generator reset — pattern to step 1,
-    // pending strum cancelled, voicing snapped to 0% until knob/CV movement
-    const bool feed2 = (Kastle2::hw.GetFeedValue(Hardware::AnalogInput::FEED_2) == Hardware::FeedValue::HIGH);
-    if (feed2 && !feed2_high_)
-    {
-        euclid_.Reset();
-        strum_.Reset();
-        groove_.Reset();
-        voicing_snap_ = true;
-        voicing_cv_at_snap_ = Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PARAM_1);
-    }
-    feed2_high_ = feed2;
+    // (The FEED_2 rising-edge generator reset and its voicing snap-to-0% latch
+    // were deleted 2026-08-18, Phase 14 — PATTERN R is a plain analog strum-speed
+    // CV now. Tap tempo and Groove's swing/skip are the re-phasing tools.)
 
-    // Sequencer params: density = BANK+POT_3 + PATTERN C (FEED_3) CV,
+    // Sequencer params: density = BANK+POT_7 + PATTERN C (FEED_3) CV,
     // cycle length = BANK+POT_4. Density 0 = silent (the knob normal-breaker).
     const size_t length = SummonerSequencer::LengthFromMapped(pots_[Pot::LENGTH]->GetMappedValue());
     const int32_t density = pots_[Pot::DENSITY]->GetValue() +
-                            SummonerSequencer::DensityCvToPot(Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::FEED_3));
+                            SummonerSequencer::FeedCvToPot(Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::FEED_3));
     euclid_.SetPattern(SummonerSequencer::DensityToHits(density, length), length);
 
     // Clock ticks step the pattern and its hits fire chords, gated/shifted by
@@ -808,17 +802,6 @@ void AppSummoner::UiLoop()
         fx_b_ = static_cast<FxB>(fx_mode_.GetMode());
     }
 
-    // PATTERN R voicing snap releases on voicing knob or SAMPLE MOD CV movement
-    if (voicing_snap_)
-    {
-        const int32_t voicing_cv = Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PARAM_1);
-        if (pots_[Pot::VOICING]->HasChanged() ||
-            std::abs(voicing_cv - voicing_cv_at_snap_) > kVoicingSnapCvRelease)
-        {
-            voicing_snap_ = false;
-        }
-    }
-
     // Voice frequencies: the chord tones from the last fire, detune spread on
     // top (voice 0 stays true). The portamento glide-ratio term was removed
     // 2026-08-16 with the portamento retirement.
@@ -845,7 +828,7 @@ void AppSummoner::UiLoop()
     // Volume: nothing to do here — Base's stock OUTPUT_GAIN owns SHIFT+POT_5
     // (digital gain + codec HP volume), applied in Base::AfterAudioLoop.
 
-    // LFO TRI amplitude/polarity (BANK+POT_7): the deadzone plateau makes
+    // LFO TRI amplitude/polarity (POT_3, primary): the deadzone plateau makes
     // exact center a clean "LFO off at the jack"
     lfo_amount_ = pots_[Pot::LFO_AMOUNT]->GetValue() - POT_HALF;
 

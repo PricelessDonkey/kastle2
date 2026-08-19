@@ -3,21 +3,21 @@
 
 using namespace kastle2;
 
-// --- DensityCvToPot: FEED_3 dead-band handling -------------------------------
+// --- FeedCvToPot: FEED dead-band handling -------------------------------
 
 TEST(SummonerSequencer_CvZeroAtRest)
 {
     // Cable at 0V and the unconnected pull-up rest (~1620) both contribute nothing
-    ASSERT_EQ(SummonerSequencer::DensityCvToPot(0), 0);
-    ASSERT_EQ(SummonerSequencer::DensityCvToPot(1620), 0);
-    ASSERT_EQ(SummonerSequencer::DensityCvToPot(SummonerSequencer::kCvActiveThreshold), 0);
+    ASSERT_EQ(SummonerSequencer::FeedCvToPot(0), 0);
+    ASSERT_EQ(SummonerSequencer::FeedCvToPot(1620), 0);
+    ASSERT_EQ(SummonerSequencer::FeedCvToPot(SummonerSequencer::kCvActiveThreshold), 0);
 }
 
 TEST(SummonerSequencer_CvFullScaleAtMax)
 {
-    ASSERT_EQ(SummonerSequencer::DensityCvToPot(POT_MAX), POT_MAX);
+    ASSERT_EQ(SummonerSequencer::FeedCvToPot(POT_MAX), POT_MAX);
     // Over-range readings clamp rather than overflow
-    ASSERT_EQ(SummonerSequencer::DensityCvToPot(POT_MAX + 500), POT_MAX);
+    ASSERT_EQ(SummonerSequencer::FeedCvToPot(POT_MAX + 500), POT_MAX);
 }
 
 TEST(SummonerSequencer_CvMonotonicAboveThreshold)
@@ -25,7 +25,7 @@ TEST(SummonerSequencer_CvMonotonicAboveThreshold)
     int32_t prev = -1;
     for (int32_t analog = SummonerSequencer::kCvActiveThreshold; analog <= POT_MAX; analog += 25)
     {
-        const int32_t out = SummonerSequencer::DensityCvToPot(analog);
+        const int32_t out = SummonerSequencer::FeedCvToPot(analog);
         ASSERT_TRUE(out >= prev);
         ASSERT_TRUE(out >= 0 && out <= POT_MAX);
         prev = out;

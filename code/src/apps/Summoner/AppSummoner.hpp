@@ -253,9 +253,6 @@ private:
 
     // PATTERN R (FEED_2) generator reset: previous tri-state, and the voicing
     // snap latch it sets (voicing forced to 0% until knob or CV movement)
-    bool feed2_high_ = false;
-    bool voicing_snap_ = false;
-    int32_t voicing_cv_at_snap_ = 0;
 
     // Tempo-synced tremolo gate (SHIFT+POT_1 rate, SHIFT+BANK+POT_4 depth).
     // Replaced portamento 2026-08-16 — see SummonerTremolo / CHORD-GEN.md.

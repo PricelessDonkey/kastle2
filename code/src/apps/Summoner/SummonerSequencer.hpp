@@ -28,7 +28,7 @@ public:
     static constexpr size_t kLengthSteps = kMaxLength - kMinLength + 1;
 
     /**
-     * @brief FEED_3 readings at or below this contribute no density.
+     * @brief FEED readings at or below this contribute nothing.
      *
      * The FEED jacks are pulled up for tri-state reads: unconnected rests at
      * ~1620 (Hardware::kFeedCenterApprox, private), indistinguishable from a
@@ -40,11 +40,14 @@ public:
     static constexpr int32_t kCvActiveThreshold = 2200;
 
     /**
-     * @brief Maps a raw FEED_3 analog reading to a density contribution in pot units.
+     * @brief Maps a raw FEED analog reading to a contribution in pot units.
+     *
+     * Shared by PATTERN C (FEED_3 -> euclidean density) and, since Phase 14
+     * (2026-08-18), PATTERN R (FEED_2 -> strum speed).
      * @param analog Raw analog value (0-4095; unconnected rests mid-range).
      * @return Density contribution 0..POT_MAX (0 at/below the dead band, full scale at 4095).
      */
-    static constexpr int32_t DensityCvToPot(int32_t analog)
+    static constexpr int32_t FeedCvToPot(int32_t analog)
     {
         if (analog <= kCvActiveThreshold)
         {
