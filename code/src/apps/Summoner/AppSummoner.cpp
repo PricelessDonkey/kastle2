@@ -39,10 +39,6 @@ constexpr int32_t kDirDefaultValue = pot(0.08f);
 // knob turn) — same gesture timing as the stock apps' bank/mode buttons
 constexpr uint32_t kModeShortPressUnder = s2alr(1.5f);
 
-// Detune spread (SHIFT+BANK+POT_1): max per-voice offset in cents — modest so
-// it reads as thickness, not out-of-tune (CHORD-GEN.md Voices)
-constexpr float kMaxDetuneCents = 12.0f;
-
 // Waveform select zones (SHIFT+BANK+POT_2); RAMP is excluded — same waveshape
 // as SAW, just phase-mirrored (see CHORD-GEN.md Voices, 2026-07-17 note)
 constexpr std::array<Oscillator::Waveform, 4> kWaveformZones = {
@@ -79,6 +75,35 @@ constexpr std::array<uint32_t, 4> kNoiseSeeds = {
     0x600D5EED + 2 * 0x9E3779B9,
     0x600D5EED + 3 * 0x9E3779B9,
 };
+
+/// Saturating cast to q15 — the Phase 15 noise paths use gains above 1.0
+/// (lowpass make-up, dust compensation), so their intermediates can exceed the
+/// q15 range and must clamp rather than wrap.
+inline q15_t ClampQ15(const int32_t v)
+{
+    if (v > Q15_MAX)
+    {
+        return Q15_MAX;
+    }
+    if (v < -Q15_MAX)
+    {
+        return -Q15_MAX;
+    }
+    return static_cast<q15_t>(v);
+}
+
+// Shared noise source for the Phase 15 upper half (dust + resonator). Deliberately
+// outside the kNoiseSeeds sequence: it is one stream feeding all four voices, so
+// correlating it with any per-voice stream would bias the crossfade.
+constexpr uint32_t kSharedNoiseSeed = 0x5EEDBEEF;
+
+// Floor on the shared bandpass centre frequency — see the UiLoop note.
+constexpr float kMinNoiseBpHz = 20.0f;
+
+// Ceiling on the shared bandpass centre frequency. Svf requires < sample_rate/3;
+// this also keeps the resonance out of the range where a high-Q ring reads as a
+// whistle rather than a pitched ping.
+constexpr float kMaxNoiseBpHz = 6000.0f;
 
 // FX B delay time (SHIFT+BANK+POT_5 in DELAY / BOTH): ~11ms → ~500ms. The right
 // channel runs shorter for a stereo spread that survives into the dry path.
@@ -186,6 +211,16 @@ void AppSummoner::Init()
         envs_[v].Init(SAMPLE_RATE);
         noises_[v].Seed(kNoiseSeeds[v]);
     }
+
+    // Noise character (Phase 15): the tilt one-pole coefficient is fixed, and
+    // the shared bandpass is the upper half's resonator — one instance for all
+    // four voices, retuned to voice 0 in UiLoop.
+    tilt_coef_ = SummonerNoiseTimbre::TiltCoef(SAMPLE_RATE);
+    shared_noise_.Seed(kSharedNoiseSeed);
+    noise_bp_.Init(SAMPLE_RATE);
+    noise_bp_.SetType(Svf::Type::BANDPASS);
+    noise_bp_.SetFrequency(kRootBase);
+    noise_bp_.SetResonance(0.0f, Svf::ForceValue::TRUE);
 
     clipper_.Init(SAMPLE_RATE);
     clipper_.SetDrive(kClipperDrive);
@@ -433,6 +468,21 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
         int32_t mix = 0;
         int32_t env_sum = 0;
 
+        // Noise character upper half (Phase 15): one shared dusted + resonant
+        // stream for all four voices. Threshold dust keeps only the largest
+        // samples (free — one comparison — and it makes dust a change to the
+        // source rather than an added stage); the sparse impulses are what let
+        // the bandpass ring audibly instead of smearing into hiss. Skipped
+        // entirely at/below the knob's 50% center.
+        q15_t shared_noise = 0;
+        if (shared_active_)
+        {
+            const int32_t raw = shared_noise_.Process();
+            const int32_t dust =
+                (raw >= dust_thresh_ || raw <= -dust_thresh_) ? ((raw * dust_gain_) >> 15) : 0;
+            shared_noise = noise_bp_.Process(ClampQ15(dust));
+        }
+
         for (size_t v = 0; v < kNumVoices; v++)
         {
             if (fired & (1u << v))
@@ -450,7 +500,34 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
             {
                 noise_env_[v] = Q15_MAX;
             }
-            const q15_t noise_atk = q15_mult(noises_[v].Process(), static_cast<q15_t>(noise_env_[v]));
+            // Noise character (Phase 15) shapes the noise *before* the attack
+            // ramp and the blend, so POT_6 still owns "how much and when".
+            q15_t nz = noises_[v].Process();
+            if (tilt_active_)
+            {
+                // Lower half: crossfade flat against a make-up-gained one-pole
+                // lowpass. The make-up gain is what stops "brown" being merely
+                // "quieter" — a one-pole at 900 Hz discards most of white
+                // noise's power (see SummonerNoiseTimbre).
+                tilt_lp_[v] += ((static_cast<int32_t>(nz) - tilt_lp_[v]) * tilt_coef_) >> 15;
+                // Clamp the boosted lowpass *before* the crossfade: at full
+                // scale an unclamped 4x term would overflow the int32 product.
+                const int32_t boosted = ClampQ15(tilt_lp_[v] * SummonerNoiseTimbre::kLowpassMakeup);
+                const int32_t mixed = (static_cast<int32_t>(nz) * (Q15_MAX - noise_tilt_) +
+                                       boosted * noise_tilt_) /
+                                      Q15_MAX;
+                nz = ClampQ15(mixed);
+            }
+            if (shared_active_)
+            {
+                // Upper half: crossfade this voice's independent stream toward
+                // the one shared resonant stream. So the top of the knob is
+                // correlated/mono (focused pings) where the bottom is a wide
+                // four-stream wash — the deliberate trade in CHORD-GEN.md.
+                nz = q15_add(q15_mult(nz, static_cast<q15_t>(Q15_MAX - noise_shared_mix_)),
+                             q15_mult(shared_noise, noise_shared_mix_));
+            }
+            const q15_t noise_atk = q15_mult(nz, static_cast<q15_t>(noise_env_[v]));
             // Equal-power noise blend, pre-envelope and pre-filter — the same
             // envelope and cutoff shape both tone and noise together
             const q15_t tone = q15_add(q15_mult(oscs_[v].Process(), noise_dry_gain_),
@@ -694,17 +771,23 @@ void AppSummoner::ApplyComboSlots(const bool force)
         }
     }
 
-    // Detune spread: non-root voices at +d / -d / +2d cents; the root voice
-    // stays true so CV_OUT 1V/oct tracking is unaffected
-    if (force || combo_.HasChanged(SlotIndex(ComboSlot::DETUNE)))
+    // Noise character (folded, Phase 15): spectral tilt below the 50% center,
+    // dust density coupled to bandpass resonance above it (SummonerNoiseTimbre).
+    // Replaced detune spread 2026-09-03. The two skip flags matter: neither half
+    // of the knob should pay the other half's per-sample cost.
+    if (force || combo_.HasChanged(SlotIndex(ComboSlot::NOISE_TIMBRE)))
     {
-        const float d = kMaxDetuneCents *
-                        static_cast<float>(combo_.GetValue(SlotIndex(ComboSlot::DETUNE))) /
-                        static_cast<float>(POT_MAX);
-        detune_mult_[0] = 1.0f;
-        detune_mult_[1] = std::exp2(d / 1200.0f);
-        detune_mult_[2] = std::exp2(-d / 1200.0f);
-        detune_mult_[3] = std::exp2(2.0f * d / 1200.0f);
+        const SummonerNoiseTimbre::Result nt =
+            SummonerNoiseTimbre::Compute(pot_to_q15(combo_.GetValue(SlotIndex(ComboSlot::NOISE_TIMBRE))));
+        noise_tilt_ = nt.tilt;
+        tilt_active_ = nt.tilt > 0;
+        dust_thresh_ = nt.dust_thresh;
+        dust_gain_ = nt.dust_gain;
+        noise_shared_mix_ = nt.shared_mix;
+        shared_active_ = nt.shared_mix > 0;
+        // ForceValue::TRUE so the fold can reach a true zero resonance — the
+        // upper half must start indistinguishable from plain white at 50%.
+        noise_bp_.SetResonance(nt.resonance, Svf::ForceValue::TRUE);
     }
 
     // Noise blend (folded, Phase 10): the knob folds blend amount with a noise-
@@ -809,12 +892,24 @@ void AppSummoner::UiLoop()
         fx_b_ = static_cast<FxB>(fx_mode_.GetMode());
     }
 
-    // Voice frequencies: the chord tones from the last fire, detune spread on
-    // top (voice 0 stays true). The portamento glide-ratio term was removed
-    // 2026-08-16 with the portamento retirement.
+    // Voice frequencies: the chord tones from the last fire. The portamento
+    // glide-ratio term was removed 2026-08-16 with the portamento retirement;
+    // the detune-spread multiplier was removed 2026-09-03 when Phase 15 took
+    // that knob for noise character (Sam's call — CHORD-GEN.md records the
+    // sterility risk and that a hardwired spread is the cheap recovery).
     for (size_t v = 0; v < kNumVoices; v++)
     {
-        oscs_[v].SetFrequency(fmin(voice_freq_[v] * detune_mult_[v], kMaxPitchHz));
+        oscs_[v].SetFrequency(fmin(voice_freq_[v], kMaxPitchHz));
+    }
+
+    // Shared noise resonator tracks voice 0 (the root), so the upper half's
+    // pitched pings stay in tune with the chord. UiLoop rate, never per-sample.
+    if (shared_active_)
+    {
+        // Floor as well as ceiling: Svf::RecalculateDamp divides by the internal
+        // frequency, so a zero centre (possible before the first chord fires)
+        // would poison the filter state with a NaN.
+        noise_bp_.SetFrequency(fmin(fmax(voice_freq_[0], kMinNoiseBpHz), kMaxNoiseBpHz));
     }
 
     // Tremolo (SHIFT+POT_2): the knob quantizes to a ratio of the clock step
@@ -825,8 +920,7 @@ void AppSummoner::UiLoop()
     trem_bass_exempt_ = trem.bass_exempt;
     tremolo_.SetPeriodFrames(groove_.GetPeriodFrames(), trem.ratio_index);
 
-    // Root pitch 1V/oct out: the sounding root — quantized, detune never applies
-    // to voice 0 — with C3 (kRootBase, the 0V-CV root) = 0V out.
+    // Root pitch 1V/oct out: the sounding root — quantized — with C3 (kRootBase, the 0V-CV root) = 0V out.
     // DAC_1V is USB-power calibration only (HARDWARE.md); roots below C3 clamp
     // to 0V inside SetCvOut.
     const float root_octaves = std::log2(voice_freq_[0] / kRootBase);

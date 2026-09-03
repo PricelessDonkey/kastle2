@@ -24,6 +24,7 @@
 #include "SummonerComboLayer.hpp"
 #include "SummonerEnvelope.hpp"
 #include "SummonerNoiseFold.hpp"
+#include "SummonerNoiseTimbre.hpp"
 #include "SummonerSequencer.hpp"
 #include "SummonerGroove.hpp"
 #include "SummonerLfoShape.hpp"
@@ -140,7 +141,7 @@ private:
      */
     enum class ComboSlot
     {
-        DETUNE,      ///< POT_1: voice detune / spread
+        NOISE_TIMBRE, ///< POT_1: folded noise character — tilt below 50%, dust+resonance above (Phase 15; retired detune spread 2026-09-03)
         WAVEFORM,    ///< POT_2: voice waveform select (sine/tri/saw/square)
         GROOVE,      ///< POT_3: humanize / swing / skip zones (expanded 2026-08-12)
         TREM_DEPTH,  ///< POT_4: tremolo gate depth (2026-08-16; held envelope attack until Phase 10 folded it onto primary POT_4)
@@ -200,6 +201,28 @@ private:
     /// so the blended noise isn't phase-locked across voices (CHORD-GEN.md
     /// Noise blend: identical streams read as a flangey artifact, not texture)
     std::array<WhiteNoise, kNumVoices> noises_;
+
+    // Noise character (Phase 15, SHIFT+BANK+POT_1, SummonerNoiseTimbre). The
+    // knob folds at 50%: spectral tilt below, dust density coupled to bandpass
+    // resonance above. All of it shapes the noise *before* the noise attack ramp
+    // and the equal-power blend, so POT_6 still owns "how much and when".
+
+    /// Per-voice one-pole lowpass state for the tilt path (lower half only).
+    std::array<int32_t, kNumVoices> tilt_lp_ = {};
+    q15_t tilt_coef_ = 0;                ///< One-pole coefficient at SAMPLE_RATE
+    q15_t noise_tilt_ = 0;               ///< Crossfade toward the lowpass: Q15_MAX = brown, 0 = flat
+    bool tilt_active_ = false;           ///< False at/above the fold — skips the one-pole entirely
+
+    /// Shared dusted + resonant noise stream for the upper half. One source and
+    /// one Svf for all four voices (not per-voice): the 4x CPU saving that
+    /// motivated the 2026-09-03 revision. The resonance sits on voice 0's
+    /// frequency — the root, consonant with every other voice.
+    WhiteNoise shared_noise_;
+    Svf noise_bp_;
+    q15_t noise_shared_mix_ = 0;         ///< 0 = per-voice/independent, Q15_MAX = fully shared
+    bool shared_active_ = false;         ///< False at/below the fold — skips the resonator entirely
+    q15_t dust_thresh_ = 0;              ///< |noise| below this is zeroed; 0 = full density (white)
+    int32_t dust_gain_ = Q15_MAX;        ///< Make-up multiplier for surviving impulses (Q15)
 
     /// Equal-power blend gains (common/dsp/synthesis/NoiseBlend.hpp), computed
     /// on slot change in ApplyComboSlots — the trig stays out of AudioLoop
@@ -284,7 +307,6 @@ private:
     // SHIFT+BANK fourth layer
     SummonerComboLayer combo_;
     int32_t waveform_zone_ = -1;                       ///< Cached waveform zone (-1 = not applied yet)
-    std::array<float, kNumVoices> detune_mult_ = {1.0f, 1.0f, 1.0f, 1.0f}; ///< Per-voice detune multipliers (root stays true)
     float humanize_ = 0.0f;                            ///< Strum jitter amount 0..1 (Groove bottom zone)
     q15_t groove_q15_ = 0;                             ///< Groove control value (SHIFT+BANK+POT_3)
 
