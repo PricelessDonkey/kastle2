@@ -223,6 +223,13 @@ private:
     bool shared_active_ = false;         ///< False at/below the fold — skips the resonator entirely
     q15_t dust_thresh_ = 0;              ///< |noise| below this is zeroed; 0 = full density (white)
     int32_t dust_gain_ = Q15_MAX;        ///< Make-up multiplier for surviving impulses (Q15)
+    float noise_upper_pos_ = 0.0f;       ///< Upper-half knob position, for the resonator make-up
+    /// Integer make-up gain on the bandpass output. A narrow bandpass returns only
+    /// the energy inside its passband (~sqrt(f0/sample_rate)), which at a low chord
+    /// root is ~30 dB of loss — without this the dust is inaudible, which is exactly
+    /// what the first hardware listen found (2026-09-03). Recomputed in UiLoop with
+    /// the centre frequency.
+    int32_t noise_bp_makeup_ = 1;
 
     /// Equal-power blend gains (common/dsp/synthesis/NoiseBlend.hpp), computed
     /// on slot change in ApplyComboSlots — the trig stays out of AudioLoop

@@ -480,7 +480,9 @@ FASTCODE void AppSummoner::AudioLoop([[maybe_unused]] q15_t *input, q15_t *outpu
             const int32_t raw = shared_noise_.Process();
             const int32_t dust =
                 (raw >= dust_thresh_ || raw <= -dust_thresh_) ? ((raw * dust_gain_) >> 15) : 0;
-            shared_noise = noise_bp_.Process(ClampQ15(dust));
+            // Integer make-up on the filter *output*: the bandpass has already
+            // shrunk the signal, so the product stays well inside int32.
+            shared_noise = ClampQ15(noise_bp_.Process(ClampQ15(dust)) * noise_bp_makeup_);
         }
 
         for (size_t v = 0; v < kNumVoices; v++)
@@ -785,6 +787,7 @@ void AppSummoner::ApplyComboSlots(const bool force)
         dust_gain_ = nt.dust_gain;
         noise_shared_mix_ = nt.shared_mix;
         shared_active_ = nt.shared_mix > 0;
+        noise_upper_pos_ = nt.upper_pos;
         // ForceValue::TRUE so the fold can reach a true zero resonance — the
         // upper half must start indistinguishable from plain white at 50%.
         noise_bp_.SetResonance(nt.resonance, Svf::ForceValue::TRUE);
@@ -909,7 +912,11 @@ void AppSummoner::UiLoop()
         // Floor as well as ceiling: Svf::RecalculateDamp divides by the internal
         // frequency, so a zero centre (possible before the first chord fires)
         // would poison the filter state with a NaN.
-        noise_bp_.SetFrequency(fmin(fmax(voice_freq_[0], kMinNoiseBpHz), kMaxNoiseBpHz));
+        const float bp_hz = fmin(fmax(voice_freq_[0], kMinNoiseBpHz), kMaxNoiseBpHz);
+        noise_bp_.SetFrequency(bp_hz);
+        // The make-up depends on the centre frequency, so it is recomputed here
+        // rather than in ApplyComboSlots — the chord moves, the knob may not.
+        noise_bp_makeup_ = SummonerNoiseTimbre::ResonatorMakeup(noise_upper_pos_, bp_hz, SAMPLE_RATE);
     }
 
     // Tremolo (SHIFT+POT_2): the knob quantizes to a ratio of the clock step

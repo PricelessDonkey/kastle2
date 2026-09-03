@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <climits>
@@ -60,6 +61,7 @@ struct SummonerNoiseTimbre
         int32_t dust_gain;  ///< Q15 make-up multiplier for the surviving impulses (>= Q15_MAX)
         float resonance;    ///< Shared bandpass resonance, 0 at/below the fold
         q15_t shared_mix;   ///< 0 = fully per-voice/independent, Q15_MAX = fully shared stream
+        float upper_pos;    ///< Upper-half position in [0,1] (0 at/below the fold) — feeds ResonatorMakeup
     };
 
     /// One-pole lowpass cutoff for the tilt path. Low enough that 0% reads as
@@ -106,6 +108,53 @@ struct SummonerNoiseTimbre
     static_assert(static_cast<int64_t>(kMaxDustGain) * Q15_MAX <= INT32_MAX,
                   "dust gain product must not overflow int32 in the audio path");
 
+    /// Reference centre frequency the resonator make-up anchors were measured at.
+    static constexpr float kMakeupRefHz = 130.0f;
+
+    /// Integer make-up gain for the shared bandpass, at kMakeupRefHz, over the
+    /// upper-half position u = 0, 0.25, 0.5, 0.75, 1.0.
+    ///
+    /// **Why this exists (added 2026-09-03, after the first hardware listen).** A
+    /// narrow bandpass returns only the fraction of broadband energy inside its
+    /// passband, so its RMS gain goes as ~sqrt(f0 / sample_rate) — at a 130 Hz
+    /// chord root that is ~30 dB of loss, and the dust simply wasn't audible. The
+    /// original design measured the dust path and the tilt path but never the
+    /// resonator, which is the stage that eats the signal. These anchors are
+    /// measured (not derived) against plain white, targeting ~0.5x its RMS.
+    static constexpr std::array<float, 5> kResonatorMakeup = {14.5f, 9.0f, 12.4f, 17.3f, 20.8f};
+
+    /// Ceiling on the resonator make-up. Also the reason it is an *integer*
+    /// multiplier: as a Q15 fraction the audio-path product would overflow int32
+    /// (the filtered signal is small, but the gain is large).
+    static constexpr int32_t kMaxResonatorMakeup = 32;
+
+    /**
+     * @brief Integer make-up gain for the shared bandpass at a given centre frequency.
+     * @param u Upper-half knob position in [0, 1].
+     * @param f0 Bandpass centre frequency in Hz.
+     * @return Integer multiplier in [1, kMaxResonatorMakeup].
+     *
+     * Scales the measured anchors by sqrt(kMakeupRefHz / f0), following the
+     * bandpass's own sqrt(f0) energy law, so a low root gets more make-up than a
+     * high one and the ping holds its level across the chord range.
+     */
+    static int32_t ResonatorMakeup(float u, float f0, float sr)
+    {
+        (void)sr;
+        if (f0 < 1.0f)
+        {
+            f0 = 1.0f;
+        }
+        const float g = InterpAnchors(kResonatorMakeup, u < 0.0f ? 0.0f : (u > 1.0f ? 1.0f : u)) *
+                        std::sqrt(kMakeupRefHz / f0);
+        const int32_t gi = static_cast<int32_t>(g + 0.5f);
+        if (gi < 1)
+        {
+            return 1;
+        }
+        return gi > kMaxResonatorMakeup ? kMaxResonatorMakeup : gi;
+    }
+
     /**
      * @brief One-pole smoothing coefficient for the tilt lowpass, as q15.
      * @param sample_rate Audio sample rate in Hz.
@@ -142,6 +191,7 @@ struct SummonerNoiseTimbre
             r.dust_gain = Q15_MAX;
             r.resonance = 0.0f;
             r.shared_mix = 0;
+            r.upper_pos = 0.0f;
             return r;
         }
 
@@ -150,6 +200,7 @@ struct SummonerNoiseTimbre
         const float u = static_cast<float>(x - Q15_HALF) / static_cast<float>(Q15_MAX - Q15_HALF);
 
         r.tilt = 0;
+        r.upper_pos = u;
         r.resonance = kMaxResonance * u;
         r.shared_mix = static_cast<q15_t>(u * static_cast<float>(Q15_MAX));
 
@@ -164,6 +215,24 @@ struct SummonerNoiseTimbre
         const int32_t gq = static_cast<int32_t>(g * static_cast<float>(Q15_MAX));
         r.dust_gain = gq > kMaxDustGain ? kMaxDustGain : (gq < Q15_MAX ? Q15_MAX : gq);
         return r;
+    }
+
+private:
+    /** @brief Piecewise-linear interpolation over 5 equally-spaced anchors, t in [0,1]. */
+    static constexpr float InterpAnchors(const std::array<float, 5> &a, float t)
+    {
+        if (t <= 0.0f)
+        {
+            return a[0];
+        }
+        if (t >= 1.0f)
+        {
+            return a[4];
+        }
+        const float scaled = t * 4.0f;
+        const int32_t seg = static_cast<int32_t>(scaled);
+        const float frac = scaled - static_cast<float>(seg);
+        return a[seg] + (a[seg + 1] - a[seg]) * frac;
     }
 };
 

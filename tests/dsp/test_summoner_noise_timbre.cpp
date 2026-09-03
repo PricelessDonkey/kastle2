@@ -3,6 +3,7 @@
 #include "../harness.hpp"
 #include "apps/Summoner/SummonerNoiseTimbre.hpp"
 #include "common/dsp/synthesis/WhiteNoise.hpp"
+#include "common/dsp/filters/Svf.hpp"
 
 using namespace kastle2;
 
@@ -180,4 +181,87 @@ TEST(SummonerNoiseTimbre_UpperHalfThinsWithoutVanishing)
     ASSERT_TRUE(mid > white * 0.4f);   // but not collapsing
     ASSERT_TRUE(top > white * 0.15f);  // still present at the very top
     ASSERT_TRUE(top < mid);
+}
+
+namespace
+{
+// The *shared* upper-half path end to end: threshold dust -> bandpass -> make-up.
+// The original Phase 15 tests measured the dust and tilt paths but never this one,
+// which is the stage that actually eats the signal — the resonator was ~30 dB down
+// at a low chord root and the dust was inaudible on hardware (2026-09-03).
+float SharedPathRms(const float knob, const float f0, const bool apply_makeup,
+                    const int samples = 200000)
+{
+    const SummonerNoiseTimbre::Result r = SummonerNoiseTimbre::Compute(Knob(knob));
+    const int32_t makeup =
+        apply_makeup ? SummonerNoiseTimbre::ResonatorMakeup(r.upper_pos, f0, kSr) : 1;
+
+    WhiteNoise noise;
+    noise.Seed(0x5EEDBEEFu);
+    Svf bp;
+    bp.Init(kSr);
+    bp.SetType(Svf::Type::BANDPASS);
+    bp.SetFrequency(f0);
+    bp.SetResonance(r.resonance, Svf::ForceValue::TRUE);
+
+    double sum = 0.0;
+    for (int i = 0; i < samples; i++)
+    {
+        int32_t v = noise.Process();
+        if (r.dust_thresh > 0)
+        {
+            v = (std::abs(v) >= r.dust_thresh) ? Clamp15((v * r.dust_gain) >> 15) : 0;
+        }
+        const int32_t out = Clamp15(bp.Process(Clamp15(v)) * makeup);
+        sum += static_cast<double>(out) * static_cast<double>(out);
+    }
+    return static_cast<float>(std::sqrt(sum / samples));
+}
+}
+
+TEST(SummonerNoiseTimbre_ResonatorMakeupKeepsTheDustAudible)
+{
+    // Without the make-up the bandpass output is 20-30 dB below white — the bug
+    // the first hardware listen caught. With it, the resonant stream must land in
+    // the same ballpark as plain white at every chord root.
+    const float white = PipelineRms(0.5f);
+    for (const float f0 : {65.0f, 130.0f, 260.0f, 520.0f, 1040.0f})
+    {
+        const float raw = SharedPathRms(1.0f, f0, false);
+        const float made_up = SharedPathRms(1.0f, f0, true);
+        ASSERT_TRUE(raw < white * 0.1f);        // the loss is real
+        ASSERT_TRUE(made_up > white * 0.2f);    // and the make-up recovers it
+        ASSERT_TRUE(made_up < white * 1.2f);    // without overshooting into clipping
+    }
+}
+
+TEST(SummonerNoiseTimbre_ResonatorLevelHoldsAcrossTheUpperHalf)
+{
+    // The top of the knob is meant to thin out, not disappear: the resonant
+    // stream stays present all the way across the upper half at a typical root.
+    const float white = PipelineRms(0.5f);
+    for (float f = 0.6f; f <= 1.0f + 1e-4f; f += 0.1f)
+    {
+        const float rms = SharedPathRms(f, 130.0f, true);
+        ASSERT_TRUE(rms > white * 0.2f);
+        ASSERT_TRUE(rms < white * 1.2f);
+    }
+}
+
+TEST(SummonerNoiseTimbre_ResonatorMakeupRisesAsTheRootFalls)
+{
+    // Lower roots need more make-up (the bandpass's sqrt(f0) energy law), and the
+    // gain is bounded so it can never overflow the audio path.
+    int32_t prev = 0;
+    for (const float f0 : {1040.0f, 520.0f, 260.0f, 130.0f, 65.0f})
+    {
+        const int32_t g = SummonerNoiseTimbre::ResonatorMakeup(1.0f, f0, kSr);
+        ASSERT_TRUE(g >= prev);
+        ASSERT_TRUE(g >= 1);
+        ASSERT_TRUE(g <= SummonerNoiseTimbre::kMaxResonatorMakeup);
+        prev = g;
+    }
+    // Degenerate centre frequencies must not produce a garbage gain.
+    ASSERT_TRUE(SummonerNoiseTimbre::ResonatorMakeup(1.0f, 0.0f, kSr) <=
+                SummonerNoiseTimbre::kMaxResonatorMakeup);
 }
