@@ -848,9 +848,14 @@ void AppSummoner::UiLoop()
         clock_tick_ = false;
         groove_.OnClockTick();
         tremolo_.OnClockTick(); // re-lock the gate so it can't drift off the grid
+        // GetStep() must be sampled *before* Step() advances the counter —
+        // Groove's swing keys off the step index's parity, and reading it after
+        // the advance swung the downbeats instead of the offbeats
+        // (fixed 2026-10-25).
+        const size_t fired_step = euclid_.GetStep();
         if (euclid_.Step())
         {
-            switch (groove_.ProcessHit(euclid_.GetStep(), groove_q15_))
+            switch (groove_.ProcessHit(fired_step, groove_q15_))
             {
             case SummonerGroove::HitAction::FIRE:
                 do_fire_ = true;
