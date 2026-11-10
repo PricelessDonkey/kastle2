@@ -124,6 +124,46 @@ public:
         }
         return static_cast<int32_t>(static_cast<int64_t>(step_frames) * r.num / r.den);
     }
+
+    /**
+     * @brief Momentary strum stretch from the PATTERN R gate (added 2026-11-10, Phase 17).
+     *
+     * PATTERN R (FEED_2) is a tri-state jack, so it is read as a three-way
+     * switch rather than a CV: unpatched = the knob's spacing, high = double
+     * it, low (a cable held at 0V) = halve it. The app maps
+     * Hardware::FeedValue onto this so the logic stays host-testable.
+     */
+    enum class Stretch
+    {
+        HALF,   ///< FEED_2 LOW: half the spacing (twice as tight)
+        NONE,   ///< FEED_2 unpatched: the knob + FREE CV spacing as-is
+        DOUBLE, ///< FEED_2 HIGH: twice the spacing
+    };
+
+    /**
+     * @brief Applies a @ref Stretch to a spacing from @ref FramesFromQ15.
+     * @param frames Voice-to-voice spacing in frames (>= 0).
+     * @param stretch Gate state.
+     * @return The stretched spacing; a block chord (0) stays a block chord.
+     *
+     * x2 and /2 keep the spacing a ratio of the clock step, so the result is
+     * still tempo-synced (most entries land on another table entry: 1/16 x2 =
+     * 1/8, 1/8 triplet x2 = 1/4 triplet). Doubling the top entry gives a full
+     * step, which @ref SummonerStrum::Fire clamps at 1s on the slowest clocks.
+     */
+    static constexpr int32_t ApplyStretch(const int32_t frames, const Stretch stretch)
+    {
+        switch (stretch)
+        {
+        case Stretch::HALF:
+            return frames / 2;
+        case Stretch::DOUBLE:
+            return frames * 2;
+        case Stretch::NONE:
+        default:
+            return frames;
+        }
+    }
 };
 
 } // namespace kastle2

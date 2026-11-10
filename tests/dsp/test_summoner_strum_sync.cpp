@@ -107,3 +107,36 @@ TEST(SummonerStrumSync_SlowestTempoTopEntryFitsUnderTheStrumClamp)
     ASSERT_TRUE(SummonerStrumSync::FramesFromQ15(Q15_MAX, kSlowestStep) <=
                 SummonerStrum::kMaxStrumFrames);
 }
+
+TEST(SummonerStrumSync_StretchDoublesAndHalvesTheSpacing)
+{
+    using S = SummonerStrumSync::Stretch;
+    const int32_t f = SummonerStrumSync::FramesFromQ15(Knob(0.55f), kStep); // 1/8 step
+    ASSERT_EQ(SummonerStrumSync::ApplyStretch(f, S::NONE), f);
+    ASSERT_EQ(SummonerStrumSync::ApplyStretch(f, S::DOUBLE), f * 2);
+    ASSERT_EQ(SummonerStrumSync::ApplyStretch(f, S::HALF), f / 2);
+}
+
+TEST(SummonerStrumSync_StretchLeavesBlockChordsAlone)
+{
+    // Knob at zero, nothing in FREE: the gate must not turn a block chord into a strum.
+    using S = SummonerStrumSync::Stretch;
+    ASSERT_EQ(SummonerStrumSync::ApplyStretch(0, S::DOUBLE), 0);
+    ASSERT_EQ(SummonerStrumSync::ApplyStretch(0, S::HALF), 0);
+}
+
+TEST(SummonerStrumSync_StretchStaysOnTheSyncedGrid)
+{
+    // Doubling a straight entry lands exactly on the next straight entry up:
+    // 1/16 -> 1/8, 1/8 -> 1/4, 1/4 -> 1/2.
+    using S = SummonerStrumSync::Stretch;
+    const auto at = [](size_t i)
+    {
+        return static_cast<int32_t>(static_cast<int64_t>(kStep) * SummonerStrumSync::kRatios[i].num /
+                                    SummonerStrumSync::kRatios[i].den);
+    };
+    ASSERT_EQ(SummonerStrumSync::ApplyStretch(at(3), S::DOUBLE), at(5));
+    ASSERT_EQ(SummonerStrumSync::ApplyStretch(at(5), S::DOUBLE), at(8));
+    ASSERT_EQ(SummonerStrumSync::ApplyStretch(at(8), S::DOUBLE), at(9));
+    ASSERT_EQ(SummonerStrumSync::ApplyStretch(at(9), S::HALF), at(8));
+}

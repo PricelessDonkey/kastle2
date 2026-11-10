@@ -160,8 +160,8 @@ void AppSummoner::Init()
     Kastle2::base.SetFeatureEnabled(Base::Feature::GATE_OUT, false);
     Kastle2::base.SetFeatureEnabled(Base::Feature::LFO_OUT, false);
 
-    // PATTERN R (FEED_2) was Summoner's strum-speed CV from Phase 14 until
-    // 2026-11-10 (now unassigned — speed's CV moved to FREE), but Base
+    // PATTERN R (FEED_2) is Summoner's strum-stretch gate (2026-11-10; it was
+    // the strum-speed CV from Phase 14 until then), but Base
     // *also* resets its clock and sequencer on a rising edge there — so a gate
     // or a rising CV into that jack still re-phased the pattern after the app's
     // own reset was deleted (Sam, 2026-08-19). New upstream gate, same shape as
@@ -704,8 +704,25 @@ void AppSummoner::FireChord()
         constrain(pots_[Pot::STRUM_SPEED]->GetValue() +
                       Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PITCH_1),
                   POT_MIN, POT_MAX);
-    const int32_t strum_frames =
-        SummonerStrumSync::FramesFromQ15(pot_to_q15(strum_val), groove_.GetPeriodFrames());
+    // PATTERN R (FEED_2) is a momentary strum stretch as of 2026-11-10 (Phase
+    // 17): read as the tri-state switch it is, not a CV — high doubles the
+    // spacing, a cable at 0V halves it, unpatched leaves it alone. Sampled at
+    // fire time, so the jack's ~9ms read latency only needs the gate to arrive
+    // a hair before the hit.
+    SummonerStrumSync::Stretch stretch = SummonerStrumSync::Stretch::NONE;
+    switch (Kastle2::hw.GetFeedValue(Hardware::AnalogInput::FEED_2))
+    {
+    case Hardware::FeedValue::HIGH:
+        stretch = SummonerStrumSync::Stretch::DOUBLE;
+        break;
+    case Hardware::FeedValue::LOW:
+        stretch = SummonerStrumSync::Stretch::HALF;
+        break;
+    default:
+        break;
+    }
+    const int32_t strum_frames = SummonerStrumSync::ApplyStretch(
+        SummonerStrumSync::FramesFromQ15(pot_to_q15(strum_val), groove_.GetPeriodFrames()), stretch);
     const q15_t dir_val = pot_to_q15(pots_[Pot::STRUM_DIR]->GetValue());
     strum_.Fire(strum_frames, SummonerStrum::DirectionFromQ15(dir_val), humanize_,
                 SummonerStrum::SkipChanceFromQ15(dir_val));
@@ -831,7 +848,7 @@ void AppSummoner::UiLoop()
 {
     // (The FEED_2 rising-edge generator reset and its voicing snap-to-0% latch
     // were deleted 2026-08-18, Phase 14 — PATTERN R became a plain analog strum-speed
-    // CV, and is unassigned since 2026-11-10. Tap tempo and Groove's swing/skip are the re-phasing tools.)
+    // CV, and a strum-stretch gate since 2026-11-10. Tap tempo and Groove's swing/skip are the re-phasing tools.)
 
     // Sequencer params: density = BANK+POT_7 + PATTERN C (FEED_3) CV,
     // cycle length = BANK+POT_4. Density 0 = silent (the knob normal-breaker).
