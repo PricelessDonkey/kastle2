@@ -118,10 +118,10 @@ private:
         PITCH_OFFSET, ///< POT_1 primary: chord root transpose (+-1 octave)
         DECAY,        ///< POT_4 primary: decay / note length
         VOICING,      ///< POT_2 primary: voicing sweep close -> open -> extended
-        STRUM_DIR,    ///< POT_3 primary: strum direction, 6 zones + PARAM_2 CV (swapped with speed 2026-08-12)
+        STRUM_DIR,    ///< BANK+POT_3: strum direction, 6 zones, knob-only (CV dropped 2026-11-10)
         QUALITY,      ///< POT_6 primary: chord quality zones (major ... dim)
         TREMOLO,      ///< SHIFT+POT_2: tempo-synced tremolo rate, folded at 50% (replaced portamento 2026-08-16; moved off POT_1 2026-08-18 so Base's input gain gets it back)
-        STRUM_SPEED,  ///< SHIFT+POT_3: strum speed, 0 = block chord, max = slow arpeggio (knob-only)
+        STRUM_SPEED,  ///< SHIFT+POT_3: strum speed, 0 = block chord, max = slow arpeggio; + FREE (PITCH_1) CV since 2026-11-10
         LENGTH_ATTEN, ///< SHIFT+POT_4: LENGTH MOD CV attenuation
         CUTOFF,       ///< SHIFT+POT_6: filter cutoff
         SCALE,        ///< BANK+POT_1: quantizer scale select
@@ -280,9 +280,6 @@ private:
 
     // Euclidean sequencer (steps on Base clock ticks; hits fire chords)
     EuclideanPattern euclid_;
-
-    // PATTERN R (FEED_2) generator reset: previous tri-state, and the voicing
-    // snap latch it sets (voicing forced to 0% until knob or CV movement)
 
     // Tempo-synced tremolo gate (SHIFT+POT_1 rate, SHIFT+BANK+POT_4 depth).
     // Replaced portamento 2026-08-16 — see SummonerTremolo / CHORD-GEN.md.

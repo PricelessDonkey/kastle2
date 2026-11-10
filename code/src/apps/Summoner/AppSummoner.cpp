@@ -31,7 +31,7 @@ constexpr uint32_t kLfoShapeSeed = 0x1F0BEA71;
 // Pitch offset (POT_1) range: +-1 octave around center
 constexpr float kPitchOffsetOctaves = 1.0f;
 
-// Strum direction (BANK+POT_3 + FREE/PITCH_1 CV) power-on/memory default: middle of the
+// Strum direction (BANK+POT_3, knob-only since 2026-11-10) power-on/memory default: middle of the
 // Up zone — clean of the 0-3% broken-chord fray at the hard stop
 constexpr int32_t kDirDefaultValue = pot(0.08f);
 
@@ -160,7 +160,8 @@ void AppSummoner::Init()
     Kastle2::base.SetFeatureEnabled(Base::Feature::GATE_OUT, false);
     Kastle2::base.SetFeatureEnabled(Base::Feature::LFO_OUT, false);
 
-    // PATTERN R (FEED_2) is Summoner's strum-speed CV as of Phase 14, but Base
+    // PATTERN R (FEED_2) was Summoner's strum-speed CV from Phase 14 until
+    // 2026-11-10 (now unassigned — speed's CV moved to FREE), but Base
     // *also* resets its clock and sequencer on a rising edge there — so a gate
     // or a rising CV into that jack still re-phased the pattern after the app's
     // own reset was deleted (Sam, 2026-08-19). New upstream gate, same shape as
@@ -686,27 +687,26 @@ void AppSummoner::FireChord()
 
     SummonerChords::ComputeChord(root, quality, voicing, quantizer_, voice_freq_);
 
-    // Strum: direction from BANK+POT_3 summed with the FREE jack (PITCH_1) — 6 zones,
-    // with the broken-chord skip fraying in at the range's two hard ends;
-    // speed from SHIFT+POT_3 summed with PATTERN R (FEED_2), stepped
-    // through ratios of the measured clock step so the cascade keeps its
-    // rhythmic meaning at any tempo (tempo-synced 2026-08-18, was an absolute
-    // 0->300ms curve). Same single step-period measurement the tremolo gate
-    // reads. The knob sets the floor and the CV sweeps upward from it; FEED_2
-    // is a tri-state jack, so it goes through the same HIGH-threshold dead band
-    // FEED_3's density CV uses — unconnected and 0V both add nothing. The
-    // direction CV is the FREE jack (PITCH_1), unipolar 0-5V, i.e.
-    // 0..ADC_5V == 0..POT_MAX, summing in pot units directly like PARAM_1 does,
-    // so an LFO into it reaches all six zones. (Both jacks rewired 2026-08-18,
-    // Phase 14: PARAM_2 went back to Base's LFO MOD.) Sampled here at fire time
+    // Strum: speed from SHIFT+POT_3 summed with the FREE jack (PITCH_1),
+    // stepped through ratios of the measured clock step so the cascade keeps
+    // its rhythmic meaning at any tempo (tempo-synced 2026-08-18). Same single
+    // step-period measurement the tremolo gate reads. FREE is unipolar 0-5V,
+    // i.e. 0..ADC_5V == 0..POT_MAX, so it sums in pot units directly like
+    // PARAM_1 does: the knob sets the floor and the CV sweeps upward, and with
+    // the knob at 0 a 0-5V source reaches every zone of the table.
+    // (Rewired 2026-11-10 at Sam's request: speed's CV moved PATTERN R (FEED_2)
+    // -> FREE, because FEED_2's tri-state dead band only responds above ~2.7V
+    // and in practice didn't audibly move it; direction gave up FREE and is
+    // knob-only on BANK+POT_3.) 6 direction zones, with the broken-chord skip
+    // fraying in at the range's two hard ends. Both sampled here at fire time
     // only — a strum's spacing is fixed once the chord is scheduled.
     const int32_t strum_val =
-        pots_[Pot::STRUM_SPEED]->GetValue() +
-        SummonerSequencer::FeedCvToPot(Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::FEED_2));
+        constrain(pots_[Pot::STRUM_SPEED]->GetValue() +
+                      Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PITCH_1),
+                  POT_MIN, POT_MAX);
     const int32_t strum_frames =
         SummonerStrumSync::FramesFromQ15(pot_to_q15(strum_val), groove_.GetPeriodFrames());
-    const q15_t dir_val = pot_to_q15(pots_[Pot::STRUM_DIR]->GetValue() +
-                                     Kastle2::hw.GetAnalogValue(Hardware::AnalogInput::PITCH_1));
+    const q15_t dir_val = pot_to_q15(pots_[Pot::STRUM_DIR]->GetValue());
     strum_.Fire(strum_frames, SummonerStrum::DirectionFromQ15(dir_val), humanize_,
                 SummonerStrum::SkipChanceFromQ15(dir_val));
 }
@@ -830,8 +830,8 @@ void AppSummoner::ApplyComboSlots(const bool force)
 void AppSummoner::UiLoop()
 {
     // (The FEED_2 rising-edge generator reset and its voicing snap-to-0% latch
-    // were deleted 2026-08-18, Phase 14 — PATTERN R is a plain analog strum-speed
-    // CV now. Tap tempo and Groove's swing/skip are the re-phasing tools.)
+    // were deleted 2026-08-18, Phase 14 — PATTERN R became a plain analog strum-speed
+    // CV, and is unassigned since 2026-11-10. Tap tempo and Groove's swing/skip are the re-phasing tools.)
 
     // Sequencer params: density = BANK+POT_7 + PATTERN C (FEED_3) CV,
     // cycle length = BANK+POT_4. Density 0 = silent (the knob normal-breaker).
